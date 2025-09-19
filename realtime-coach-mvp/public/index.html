@@ -1,0 +1,108 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Realtime Coach MVP</title>
+    <style>
+      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 24px; }
+      .row { display: flex; gap: 16px; align-items: center; margin: 8px 0; }
+      label { min-width: 160px; }
+      #log { white-space: pre-wrap; border: 1px solid #ddd; padding: 12px; height: 220px; overflow: auto; }
+      audio { display: block; margin-top: 12px; }
+      select, button { padding: 6px 10px; }
+      #status { color: #0a7; font-weight: 600; }
+    </style>
+  </head>
+  <body>
+    <h1>Realtime Coach MVP (no buttons)</h1>
+
+    <h3>Профили</h3>
+    <div class="row">
+      <label>Профиль:</label>
+      <select id="profileSelect"></select>
+      <input id="profileName" placeholder="Название профиля" style="flex:1" />
+      <button id="profileNew">Новый</button>
+      <button id="profileSave">Сохранить</button>
+      <button id="profileDelete">Удалить</button>
+    </div>
+
+    <h3>Настройки профиля</h3>
+    <div class="row">
+      <label>Голос ассистента:</label>
+      <select id="voice">
+        <option value="marin">marin</option>
+        <option value="alloy">alloy</option>
+        <option value="cedar">cedar</option>
+      </select>
+      <label>Язык ответа:</label>
+      <select id="langMode">
+        <option value="auto">auto</option>
+        <option value="ru">ru</option>
+        <option value="en">en</option>
+      </select>
+      <label><input type="checkbox" id="noClarify" checked /> Без уточнений во время сессии</label>
+    </div>
+    <div class="row">
+      <label>Буллеты/слова:</label>
+      <span>буллетов</span>
+      <input id="bulletsMin" type="number" value="1" min="1" max="3" style="width:60px" />
+      <span>—</span>
+      <input id="bulletsMax" type="number" value="2" min="1" max="5" style="width:60px" />
+      <span>, слов</span>
+      <input id="wordsMin" type="number" value="3" min="2" max="12" style="width:60px" />
+      <span>—</span>
+      <input id="wordsMax" type="number" value="7" min="3" max="16" style="width:60px" />
+    </div>
+    <div class="row">
+      <label>Стиль/темп:</label>
+      <input id="styleText" placeholder="напр. быстро, уверенно, без вводных" style="flex:1" />
+    </div>
+    <div class="row">
+      <label>Гейт (порог/удержание):</label>
+      <input id="thresholdDb" type="number" value="6" step="0.5" style="width:80px" /> dB
+      <input id="hangMs" type="number" value="250" step="10" style="width:80px" /> ms
+      <button id="calibrateBtn">Калибровка 10с</button>
+      <span id="calStatus"></span>
+    </div>
+    <div class="row">
+      <label>Тень (ваш голос):</label>
+      <label><input type="checkbox" id="shadowEnable" /> Включить транскрипт «теневого» канала</label>
+    </div>
+    <div class="row">
+      <label>Факты (JSON/CSV):</label>
+      <input id="factsFile" type="file" accept=".json,.csv,.txt" />
+      <button id="factsClear">Очистить</button>
+    </div>
+    <div class="row">
+      <label>Факты (текст):</label>
+      <textarea id="factsText" placeholder="Краткие факты/FAQ/метрики для инжекта" style="flex:1; height:72px"></textarea>
+    </div>
+
+    <div class="row">
+      <label>Near mic (ваш вкладыш):</label>
+      <select id="near"></select>
+    </div>
+    <div class="row">
+      <label>Room mic (зал/аудитория):</label>
+      <select id="room"></select>
+    </div>
+
+    <div class="row">
+      <button id="start">Start (по профилю)</button>
+      <span id="status">idle</span>
+    </div>
+
+    <div class="row">
+      <label>Last transcript:</label>
+      <div id="last"></div>
+    </div>
+
+    <audio id="assistantAudio" autoplay></audio>
+
+    <h3>Log</h3>
+    <div id="log"></div>
+
+    <script src="client.js" type="module"></script>
+  </body>
+</html>
