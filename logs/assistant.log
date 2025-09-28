@@ -1,0 +1,12 @@
+2025-09-28 22:32:29.776 | INFO     | live_recognizer:setup_logging:102 - Логи пишутся в /Users/vladimirdoronin/VovkaNowEngineer/CluelyPro/logs/assistant.log
+2025-09-28 22:32:29.777 | INFO     | live_recognizer:__init__:360 - Статические тезисы не найдены (файл theses.txt отсутствует или пуст) — будет использоваться автогенерация
+2025-09-28 22:32:29.845 | INFO     | thesis_generator:__init__:41 - ThesisGenerator инициализирован: model=gemini-2.5-flash-lite
+2025-09-28 22:32:29.845 | INFO     | live_recognizer:__init__:367 - Автогенерация тезисов Gemini включена
+2025-09-28 22:32:29.845 | INFO     | asr_transcriber:_init:103 - Loading faster-whisper model=tiny device=cuda compute_type=float16 lang=ru
+2025-09-28 22:32:30.079 | WARNING  | asr_transcriber:__init__:117 - ASR инициализация на CUDA не удалась (This CTranslate2 package was not compiled with CUDA support). Переключаюсь на CPU/int8.
+2025-09-28 22:32:30.079 | INFO     | asr_transcriber:_init:103 - Loading faster-whisper model=tiny device=cpu compute_type=int8 lang=ru
+2025-09-28 22:32:30.368 | INFO     | live_recognizer:__init__:399 - LiveVoiceVerifier initialized | model=speechbrain/spkrec-ecapa-voxceleb, device=cpu, threshold=0.75, VAD=webrtc
+2025-09-28 22:32:30.710 | INFO     | live_recognizer:live_verify:889 - Старт лайв-распознавания. Нажмите Ctrl+C для остановки. Говорите в микрофон.
+2025-09-28 22:32:37.259 | INFO     | live_recognizer:_handle_foreign_text:548 - незнакомый голос (ASR: пусто)
+2025-09-28 22:32:38.786 | INFO     | live_recognizer:_handle_foreign_text:548 - незнакомый голос (ASR: пусто)
+2025-09-28 22:32:40.728 | INFO     | live_recognizer:live_verify:906 - Авто-остановка по таймеру run_seconds

@@ -451,34 +451,34 @@ def main() -> None:
         # Включаем LLM, только если есть ключ
         llm_enable = bool(os.getenv("GEMINI_API_KEY"))
 
-        # Запускаем live-режим с разумными дефолтами
+        # Запускаем live-режим с оптимизированными параметрами
         live_cli(
             profile_path=selected_profile,
             threshold=0.75,
             vad_aggr=2,
-            min_consec=5,
-            flatness_th=0.60,
+            min_consec=3,  # Уменьшаем для быстрой реакции
+            flatness_th=0.65,  # Чуть выше для меньшего шума
             vad_backend="webrtc",
             silero_vad_threshold=0.5,
             silero_vad_window_ms=100,
-            min_segment_ms=500,
-            max_silence_ms=400,
-            pre_roll_ms=160,
+            min_segment_ms=400,  # Меньше минимальный сегмент
+            max_silence_ms=300,  # Быстрее реагируем на паузы
+            pre_roll_ms=100,  # Меньше предзахват
             asr=True,
-            asr_model=os.getenv("ASR_MODEL", "small"),
+            asr_model=os.getenv("ASR_MODEL", "tiny"),  # Меньшая модель для скорости
             asr_lang="ru",
             asr_device=None,
             asr_compute=None,
             llm=llm_enable,
             theses_path=Path("theses.txt"),
-            thesis_match=0.6,
-            thesis_semantic=0.55,
+            thesis_match=0.5,  # Меньше порог для быстрого совпадения
+            thesis_semantic=0.50,  # Меньше порог
             thesis_semantic_model=None,
-            thesis_semantic_disable=False,
-            thesis_gemini_conf=0.60,
-            thesis_gemini_disable=not llm_enable,
+            thesis_semantic_disable=True,  # Отключаем семантику для скорости
+            thesis_gemini_conf=0.50,  # Меньше порог
+            thesis_gemini_disable=True,  # Отключаем Gemini для скорости
             thesis_autogen_disable=False,
-            thesis_autogen_batch=4,
+            thesis_autogen_batch=3,  # Меньше тезисов для скорости
             run_seconds=run_seconds,
         )
         return

@@ -329,10 +329,9 @@ class LiveVoiceVerifier:
         self._segment_stop = threading.Event()
         # Как часто повторять текущий тезис (секунды), если он ещё не закрыт
         try:
-            # Увеличиваем интервал повторения чтобы не мешать
-            self._thesis_repeat_sec: float = float(os.getenv("THESIS_REPEAT_SEC", "30"))
+            self._thesis_repeat_sec: float = float(os.getenv("THESIS_REPEAT_SEC", "6"))
         except Exception:
-            self._thesis_repeat_sec = 30.0
+            self._thesis_repeat_sec = 6.0
         # Фильтрация «не-вопросов»: heuristic | gemini (по умолчанию gemini)
         self._question_filter_mode: str = os.getenv("QUESTION_FILTER_MODE", "gemini").strip().lower()
         try:
@@ -551,30 +550,23 @@ class LiveVoiceVerifier:
             logger.debug(f"Игнорирую распознанный TTS-хвост: {t}")
             return
         logger.info(f"незнакомый голос (ASR): {t}")
-        # Быстрая обработка тезисов через AI
         if self._ai_only_thesis:
             theses = self._extract_theses_ai(t)
             if theses:
-                # Ограничиваем количество тезисов для скорости
-                limited_theses = theses[:min(3, len(theses))]
                 self.thesis_prompter = ThesisPrompter(
-                    theses=limited_theses,
+                    theses=theses,
                     match_threshold=self._thesis_match_threshold,
-                    enable_semantic=False,  # Отключаем семантику для скорости
+                    enable_semantic=self._thesis_semantic_enable,
                     semantic_threshold=self._thesis_semantic_threshold,
                     semantic_model_id=self._thesis_semantic_model,
-                    enable_gemini=False,  # Отключаем Gemini для скорости
+                    enable_gemini=self._thesis_gemini_enable,
                     gemini_min_conf=self._thesis_gemini_min_conf,
                 )
                 self._thesis_done_notified = False
-                # Озвучиваем только первый тезис сразу
-                if limited_theses:
-                    self._speak_text(limited_theses[0])
-                    self._last_announce_ts = time.time()
+                self._announce_theses_batch(theses)
             else:
                 logger.debug("ИИ не нашёл вопросов/тезисов в фрагменте — пропускаю")
             return
-        # Обработка вопросов - упрощаем
         questions = self._extract_questions(t)
         questions = self._filter_questions_by_importance(questions)
         if questions:
@@ -739,31 +731,10 @@ class LiveVoiceVerifier:
         s2 = s.replace(";", "\n")
         for line in s2.splitlines():
             t = line.strip()
-            # Уберём маркеры списков и нумерацию
             t = re.sub(r"^[\-•*\s]*", "", t)
             t = re.sub(r"^\d+[\).]\s*", "", t)
-            # Отбросим явные JSON-структуры
-            if not t or t in {"[", "]", "{", "}", "},", "],"}:
-                continue
-            # Пропустим строки, начинающиеся/заканчивающиеся скобками — это, вероятно, JSON
-            if t.startswith("{") or t.startswith("[") or t.endswith("}") or t.endswith("]"):
-                continue
-            # Уберём завершающие запятые
-            if t.endswith(","):
-                t = t[:-1].strip()
-            # Уберём внешние кавычки
-            if (t.startswith('"') and t.endswith('"')) or (t.startswith("'") and t.endswith("'")):
-                t = t[1:-1].strip()
-            # Пропустим строки вида key: value (скорее всего это JSON-ключи, напр. "theses": [)
-            if re.match(r'^"?[A-Za-z_][\w\s\-]*"?\s*:\s*', t):
-                continue
-            # Пропустим пустяковые скобки
-            if t in {"[", "]"}:
-                continue
-            # Должен быть осмысленный текст c буквами
-            if not any(ch.isalpha() for ch in t):
-                continue
-            parts.append(t)
+            if t and not t.startswith("{") and not t.startswith("}"):
+                parts.append(t)
         return parts[:n_max]
 
     def _collect_enrollment_audio(
@@ -889,7 +860,8 @@ class LiveVoiceVerifier:
         logger.info(
             "Старт лайв-распознавания. Нажмите Ctrl+C для остановки. Говорите в микрофон."
         )
-        # Не озвучиваем тезис при старте - ждём вопроса
+
+        self._announce_thesis()
 
         stop_at = time.time() + run_seconds if run_seconds and run_seconds > 0 else None
         try:
@@ -982,17 +954,16 @@ class LiveVoiceVerifier:
                                 self._enqueue_segment("other", wav, dist)
 
                         # Периодически повторяем текущий тезис, если ещё не закрыт
-                        # Отключаем автоповтор чтобы не мешать пользователю
-                        # try:
-                        #     if (
-                        #         self.thesis_prompter is not None
-                        #         and self.thesis_prompter.has_pending()
-                        #         and (time.time() - self._last_announce_ts) >= self._thesis_repeat_sec
-                        #     ):
-                        #         self.thesis_prompter.reset_announcement()
-                        #         self._announce_thesis()
-                        # except Exception:
-                        #     pass
+                        try:
+                            if (
+                                self.thesis_prompter is not None
+                                and self.thesis_prompter.has_pending()
+                                and (time.time() - self._last_announce_ts) >= self._thesis_repeat_sec
+                            ):
+                                self.thesis_prompter.reset_announcement()
+                                self._announce_thesis()
+                        except Exception:
+                            pass
 
         except KeyboardInterrupt:
             logger.info("Остановлено пользователем")
@@ -1015,35 +986,14 @@ class LiveVoiceVerifier:
         if not text or self._tts is None or sd is None:
             return
         try:
-            # Базовая валидация: не озвучиваем JSON-подобные ключи и пустые конструкции
-            s = (text or "").strip()
-            if not s:
-                return
-            # Удалим внешние кавычки
-            if (s.startswith('"') and s.endswith('"')) or (s.startswith("'") and s.endswith("'")):
-                s = s[1:-1].strip()
-            # Пропускаем строки вида "theses": [], а также любые ключ: значение без нормального текста
-            import re as _re
-            if _re.match(r'^"?\w+"?\s*:\s*(\[.*\]|\{.*\}|".*"|\d+|true|false|null)?\s*$', s, flags=_re.IGNORECASE):
-                return
-            # Должны быть буквы (кириллица/латиница)
-            if not any(ch.isalpha() for ch in s):
-                return
-            # Ограничиваем длину текста для скорости
-            if len(s) > 100:
-                s = s[:97] + "..."
-
-            audio = self._tts.synth(s)
+            audio = self._tts.synth(text)
             if audio.size <= 0:
                 return
             duration = float(audio.shape[0]) / float(self._tts.sample_rate)
-            # Уменьшаем задержку после TTS
-            self._suppress_until = time.time() + duration + 0.05  # вместо 0.1
+            self._suppress_until = time.time() + duration + 0.1
             sd.stop()
-            # Используем асинхронное воспроизведение без wait для быстроты
             sd.play(audio, samplerate=self._tts.sample_rate)
-            # Небольшая задержка только для начала воспроизведения
-            time.sleep(min(0.3, duration * 0.3))  # Ждём только 30% времени
+            sd.wait()
         except Exception as e:  # noqa: BLE001
             logger.exception(f"TTS ошибка: {e}")
 
@@ -1072,12 +1022,11 @@ class LiveVoiceVerifier:
         if not qtext:
             return
         try:
-            # Генерируем меньше тезисов для скорости (2-3 вместо 4)
-            candidates = self._thesis_generator.generate(qtext, n=min(3, self._thesis_autogen_batch), language="ru")
+            candidates = self._thesis_generator.generate(qtext, n=self._thesis_autogen_batch, language="ru")
         except Exception as e:  # noqa: BLE001
             logger.exception(f"Ошибка автогенерации тезисов: {e}")
             return
-        # Быстрая фильтрация дублей 
+        # фильтрация дублей по истории (регистр игнорируем)
         new_items: list[str] = []
         for c in candidates:
             key = c.strip().lower()
@@ -1085,39 +1034,37 @@ class LiveVoiceVerifier:
                 continue
             self._theses_history.add(key)
             new_items.append(c.strip())
-            # Ограничиваем количество тезисов
-            if len(new_items) >= 3:
-                break
         if not new_items:
             return
-        # Создаём упрощённый помощник без лишних проверок
+        # создать/обновить помощника на свежий батч тезисов
         self.thesis_prompter = ThesisPrompter(
             theses=new_items,
             match_threshold=self._thesis_match_threshold,
-            enable_semantic=False,  # Отключаем для скорости
+            enable_semantic=self._thesis_semantic_enable,
             semantic_threshold=self._thesis_semantic_threshold,
             semantic_model_id=self._thesis_semantic_model,
-            enable_gemini=False,  # Отключаем для скорости  
+            enable_gemini=self._thesis_gemini_enable,
             gemini_min_conf=self._thesis_gemini_min_conf,
         )
         self._thesis_done_notified = False
-        # Озвучиваем только первый тезис без префиксов
-        if new_items:
-            self._speak_text(new_items[0])
-            self._last_announce_ts = time.time()
+        # Озвучиваем 2-3 тезиса одним блоком
+        self._announce_theses_batch(new_items)
+        # И сразу проговорим первый тезис отдельно, чтобы кандидат услышал формулировку
+        try:
+            self._announce_thesis()
+        except Exception as announce_err:  # noqa: F841
+            logger.warning(f"Не удалось озвучить первый тезис: {announce_err}")
 
     def _announce_theses_batch(self, theses: list[str]) -> None:
         if not theses:
             return
-        # Озвучиваем только сами тезисы, без лишних префиксов
-        # Берём только первые 2-3 тезиса для краткости
-        to_announce = theses[:min(3, len(theses))]
-        for i, thesis in enumerate(to_announce, 1):
-            # Краткое озвучивание: только номер и тезис
-            text = f"{i}. {thesis}"
-            self._speak_text(text)
-            # Небольшая пауза между тезисами
-            time.sleep(0.2)
+        # Сформируем компактный проговариваемый список: 1) .., 2) .., 3) ..
+        nums = []
+        for i, t in enumerate(theses, 1):
+            nums.append(f"{i}) {t}")
+        text = "; ".join(nums)
+        prefix = "Предлагаю тезисы ответа: "
+        self._speak_text(prefix + text)
         self._last_announce_ts = time.time()
         if self.thesis_prompter is not None:
             self.thesis_prompter.reset_announcement()
@@ -1136,10 +1083,16 @@ class LiveVoiceVerifier:
         if not text:
             return
         logger.info(f"Тезис: {text}")
-        # Озвучиваем только сам тезис, без дополнительной информации
         self._speak_text(text)
         self.thesis_prompter.mark_announced()
-        # Убираем озвучивание оставшихся тезисов - это избыточно
+
+        # Дополнительно: кратко озвучим, что осталось (до 2-3 пунктов)
+        try:
+            rem = self.thesis_prompter.remaining_announcement(limit=3)
+            if rem:
+                self._speak_text(rem)
+        except Exception:
+            pass
         self._last_announce_ts = time.time()
 
     def _process_self_segment(self, wav: np.ndarray) -> None:
@@ -1342,22 +1295,29 @@ class LiveVoiceVerifier:
 
             def _call_and_parse(force_json_start: bool = False) -> List[str]:
                 sys_instr = (
-                    "Вопрос к кандидату? Верни 2-3 тезиса. Личное? Пустой список."
-                    " JSON: {\"theses\": [\"...\"]}"
+                    "Ты — фильтр и методист для собеседования/экзамена. На вход — транскрипт чужой реплики."
+                    " 1) Если реплика явно содержит вопрос к кандидату (в т.ч. простые факты: 'Где находится печень',"
+                    " 'Сколько будет два плюс два', 'Правда ли, что Луна вращается вокруг Земли') или профильные вопросы"
+                    " ('Опишите архитектуру REST', 'Как работает TCP', 'Разница процесс/поток', 'Перечислите уровни OSI',"
+                    " 'Когда вышла первая версия Python', 'Определите бинарное дерево поиска') — верни 2–4 кратких тезиса ответа кандидата."
+                    " 2) Если это личные/бытовые/вопросы к ассистенту ('как дела', 'сколько тебе лет', 'кто ты') — верни пустой список."
+                    " Строго JSON и только JSON: {\"theses\": [\"...\"]}. Никаких code fences и строкового JSON."
+                    " Ответ ДОЛЖЕН начинаться с { и содержать только поле theses. Язык — русский."
+                    " Каждый тезис — максимум пятнадцать слов, по делу."
                 )
                 if force_json_start:
                     sys_instr += " Ответ ДОЛЖЕН начинаться с символа { и не содержать ничего кроме JSON."
                 prompt = json.dumps({"transcript": t}, ensure_ascii=False)
                 cfg = types.GenerateContentConfig(
                     system_instruction=sys_instr,
-                    max_output_tokens=128,  # Меньше токенов
+                    max_output_tokens=256,
                     temperature=0.0,
-                    top_p=0.8,  # Меньше разнообразия
+                    top_p=0.9,
                     thinking_config=types.ThinkingConfig(thinking_budget=0),
                     response_mime_type="application/json",
                 )
                 resp = client.models.generate_content(
-                    model="gemini-2.0-flash",  # Стабильная модель
+                    model="gemini-2.5-flash-lite",
                     contents=[types.Content(role="user", parts=[types.Part.from_text(text=prompt)])],
                     config=cfg,
                 )
@@ -1391,22 +1351,29 @@ def extract_theses_from_text(text: str) -> List[str]:
 
         def _call_and_parse(force_json_start: bool = False) -> List[str]:
             sys_instr = (
-                "Вопрос к кандидату? Верни 2-3 тезиса ответа. Личное/бытовое? Пустой список."
-                " JSON: {\"theses\": [\"...\"]}"
+                "Ты — фильтр и методист для собеседования/экзамена. На вход — транскрипт чужой реплики."
+                " 1) Если реплика явно содержит вопрос к кандидату (в т.ч. простые факты: 'Где находится печень',"
+                " 'Сколько будет два плюс два', 'Правда ли, что Луна вращается вокруг Земли') или профильные вопросы"
+                " ('Опишите архитектуру REST', 'Как работает TCP', 'Разница процесс/поток', 'Перечислите уровни OSI',"
+                " 'Когда вышла первая версия Python', 'Определите бинарное дерево поиска') — верни 2–4 кратких тезиса ответа кандидата."
+                " 2) Если это личные/бытовые/вопросы к ассистенту — верни пустой список."
+                " Строго JSON и только JSON: {\"theses\": [\"...\"]}. Никаких code fences и строкового JSON."
+                " Ответ ДОЛЖЕН начинаться с { и содержать только поле theses. Язык — русский."
+                " Каждый тезис — максимум пятнадцать слов, по делу."
             )
             if force_json_start:
                 sys_instr += " Ответ ДОЛЖЕН начинаться с символа { и не содержать ничего кроме JSON."
             prompt = json.dumps({"transcript": t}, ensure_ascii=False)
             cfg = types.GenerateContentConfig(
                 system_instruction=sys_instr,
-                max_output_tokens=128,
+                max_output_tokens=256,
                 temperature=0.0,
-                top_p=0.8,
+                top_p=0.9,
                 thinking_config=types.ThinkingConfig(thinking_budget=0),
                 response_mime_type="application/json",
             )
             resp = client.models.generate_content(
-                model="gemini-2.0-flash",
+                model="gemini-2.5-flash-lite",
                 contents=[types.Content(role="user", parts=[types.Part.from_text(text=prompt)])],
                 config=cfg,
             )
