@@ -23,6 +23,7 @@ dependencies = [
     "python-dotenv>=1.1.1",
     "silero-vad>=5.0.0",
     "num2words>=0.5.14",
+    "pytest>=8.3.3",
 ]
 
 [tool.setuptools]

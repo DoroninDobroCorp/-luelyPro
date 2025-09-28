@@ -38,8 +38,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_enroll.add_argument(
         "--seconds",
         type=float,
-        default=5.0,
-        help="Длительность записи для профиля (сек)",
+        default=20.0,
+        help="Максимальная длительность записи для профиля (сек)",
     )
     p_enroll.add_argument(
         "--min-voiced-seconds",
@@ -167,8 +167,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_live.add_argument(
         "--enroll-seconds",
         type=float,
-        default=8.0,
-        help="Длительность записи при авто-энролле (сек)",
+        default=20.0,
+        help="Максимальная длительность записи при авто-энролле (сек)",
     )
     p_live.add_argument(
         "--enroll-read-script-file",
@@ -334,8 +334,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_live.add_argument(
         "--thesis-autogen-batch",
         type=int,
-        default=3,
-        help="Размер пакета автоматически генерируемых тезисов (обычно 2–3)",
+        default=4,
+        help="Размер пакета автоматически генерируемых тезисов (обычно 3–4)",
     )
 
     # Тестовый режим: прогон текстов без аудио
@@ -424,7 +424,7 @@ def main() -> None:
             print(f"Профиль {selected_profile} не найден. Запишем новый.")
             enroll_cli(
                 profile_path=selected_profile,
-                seconds=8.0,
+                seconds=20.0,
                 min_voiced_seconds=4.0,
                 vad_aggr=2,
                 min_consec=5,
@@ -478,7 +478,7 @@ def main() -> None:
             thesis_gemini_conf=0.60,
             thesis_gemini_disable=not llm_enable,
             thesis_autogen_disable=False,
-            thesis_autogen_batch=3,
+            thesis_autogen_batch=4,
             run_seconds=run_seconds,
         )
         return

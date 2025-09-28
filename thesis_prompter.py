@@ -125,6 +125,10 @@ class ThesisPrompter:
         if self.has_pending():
             self._announced = True
 
+    def reset_announcement(self) -> None:
+        if self.has_pending():
+            self._announced = False
+
     def consume_transcript(self, transcript: str) -> bool:
         if not transcript:
             return False
@@ -215,7 +219,7 @@ class ThesisPrompter:
         nums = []
         for i, t in enumerate(items, 1):
             nums.append(f"{i}) {t}")
-        return "Осталось: " + "; ".join(nums)
+        return "Остались тезисы: " + "; ".join(nums)
 
 
 __all__ = ["ThesisPrompter"]
