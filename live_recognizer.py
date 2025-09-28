@@ -60,6 +60,7 @@ except Exception:  # noqa: BLE001
 
 
 LOGGING_CONFIGURED = False
+CURRENT_LOG_DIR: Optional[Path] = None
 
 
 def setup_logging(
@@ -67,13 +68,18 @@ def setup_logging(
     console_level: str = os.getenv("CONSOLE_LOG_LEVEL", "INFO"),
     file_level: str = os.getenv("FILE_LOG_LEVEL", "DEBUG"),
 ) -> Path:
-    """Configure loguru sinks once per process and return the file sink path."""
-    global LOGGING_CONFIGURED
-    if LOGGING_CONFIGURED:
-        target_dir = Path(log_dir or os.getenv("LOG_DIR", "logs"))
-        return target_dir / "assistant.log"
-
+    """Configure loguru sinks and return the file sink path.
+    If log_dir is provided, reconfigure sinks to write there.
+    """
+    global LOGGING_CONFIGURED, CURRENT_LOG_DIR
     target_dir = Path(log_dir or os.getenv("LOG_DIR", "logs"))
+    # Reconfigure if not configured yet OR explicit log_dir differs from current
+    need_reconfigure = (not LOGGING_CONFIGURED) or (
+        log_dir is not None and (CURRENT_LOG_DIR is None or target_dir != CURRENT_LOG_DIR)
+    )
+    if not need_reconfigure and CURRENT_LOG_DIR is not None:
+        return CURRENT_LOG_DIR / "assistant.log"
+
     target_dir.mkdir(parents=True, exist_ok=True)
     log_file = target_dir / "assistant.log"
 
@@ -82,14 +88,20 @@ def setup_logging(
     logger.add(
         log_file,
         level=file_level.upper(),
-        enqueue=True,
+        enqueue=False,  # синхронная запись, чтобы файл гарантированно создавался в тестах
         mode="w",
         encoding="utf-8",
         backtrace=True,
         diagnose=True,
     )
+    # гарантируем наличие файла независимо от поведения sink
+    try:
+        log_file.touch(exist_ok=True)
+    except Exception:
+        pass
     logger.info(f"Логи пишутся в {log_file.resolve()}")
     LOGGING_CONFIGURED = True
+    CURRENT_LOG_DIR = target_dir
     return log_file
 
 
