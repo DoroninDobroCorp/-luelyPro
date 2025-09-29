@@ -125,6 +125,56 @@ ASSISTANT_RUN_SECONDS=10 ASR_MODEL=tiny python main.py live \
 uv run python main.py live --asr --llm --run-seconds 10
 ```
 
+## Гибридный Веб-режим (Remote Mic/Ear)
+
+В этом режиме браузер выступает «удалённым микрофоном и наушником», а весь ML‑поток выполняется в Python.
+
+- Браузер: захватывает микрофон → отправляет сырой PCM16 mono 16 kHz по WebSocket → принимает готовый аудиоответ (WAV) и проигрывает.
+- Python: VAD → «свой/чужой» (ECAPA) → ASR (faster‑whisper) незнакомой речи → генерация тезисов (Gemini) → TTS (Silero) → отправка в браузер.
+
+### Запуск
+
+```bash
+# 1) Поднять сервер (WebSocket + статический HTTP). Авто‑стоп: 10с, чтобы не зависнуть
+./run.sh web
+
+# Переменные окружения (опционально)
+HOST=127.0.0.1 WS_PORT=8765 HTTP_PORT=8000 RUN_SECONDS=10 ./run.sh web
+```
+
+Откройте в браузере:
+
+```
+http://127.0.0.1:8000/index.html
+```
+
+Нажмите «Connect». Браузер запросит доступ к микрофону, начнётся поток на Python. Озвученные тезисы будут воспроизводиться автоматически.
+
+### Зависимости и ключи
+
+- Требуется `websockets` (добавлено в `requirements.txt`).
+- Для автогенерации тезисов/LLM‑фильтров задайте `GEMINI_API_KEY`.
+
+### Тюнинг (ENV)
+
+- `ASR_MODEL` — `tiny|base|small|...` (по умолчанию `tiny` в веб‑режиме).
+- `VAD_BACKEND` — `webrtc|silero` (по умолчанию `webrtc`).
+- `MIN_SEGMENT_MS` (по умолчанию `400`), `MAX_SILENCE_MS` (`300`), `PRE_ROLL_MS` (`100`).
+- `PROFILE=profiles/my_profile.npz` — путь к профилю. Если не найден, все голоса считаются «чужими».
+- Таймеры авто‑остановки: `RUN_SECONDS`/`ASSISTANT_RUN_SECONDS`.
+
+### Отличия от `live`
+
+- Источник аудио — веб‑браузер (WebSocket), а не `sounddevice`.
+- TTS не проигрывается локально; вместо этого отправляется в браузер в формате WAV.
+
+### Смоук‑тест
+
+```bash
+RUN_SECONDS=10 ASR_MODEL=tiny ./run.sh web
+# Открыть http://127.0.0.1:8000/ и нажать Connect. Наблюдать логи в консоли сервера.
+```
+
 ### Управление профилями
 
 ```bash
@@ -211,6 +261,7 @@ uv run python main.py live --asr --llm --theses theses.txt --thesis-autogen-disa
 - `thesis_generator.py` — генерация тезисов (Gemini Flash Lite)
 - `thesis_judge.py` — судья «тезис покрыт» (Gemini)
 - `thesis_prompter.py` — логика помощника: ключевые слова/семантика/Gemini
+- `ws_server.py` — гибридный сервер: WebSocket (PCM вход, WAV выход) + HTTP статика (`index.html`, `index.js`, `index.css`)
 
 ## Частые вопросы
 

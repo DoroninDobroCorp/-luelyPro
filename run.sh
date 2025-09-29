@@ -71,5 +71,17 @@ if [[ "$1" == "live" ]]; then
   fi
 fi
 
+# New: Web hybrid mode (WebSocket + HTTP static)
+if [[ "$1" == "web" ]]; then
+  shift
+  # Default auto-stop 10s if not provided
+  has_timer_env=${RUN_SECONDS:-}
+  if [[ -z "$has_timer_env" ]]; then
+    export RUN_SECONDS=10
+  fi
+  echo "[run.sh] Starting Web hybrid server (ws_server.py)..."
+  exec "$VENV_PY" ws_server.py "$@"
+fi
+
 # 5) Run main with passed arguments
 exec "$VENV_PY" main.py "$@"

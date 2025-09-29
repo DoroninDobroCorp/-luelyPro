@@ -8,9 +8,12 @@ import time
 from dataclasses import dataclass
 from collections import deque
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Callable
+from datetime import date
 
 import numpy as np
+import io
+import wave
 from loguru import logger
 
 # Мягкие импорты тяжёлых/опциональных зависимостей, чтобы юнит-тесты работали оффлайн
@@ -305,6 +308,9 @@ class LiveVoiceVerifier:
         # TTS для озвучки ответа LLM
         self._tts: Optional[SileroTTS] = None
         self._suppress_until: float = 0.0  # подавляем обработку входа на время TTS
+        # Внешний получатель аудио (например, WebSocket-клиент). При наличии —
+        # TTS будет отправляться туда, а не проигрываться локально через sounddevice
+        self._audio_sink: Optional[Callable[[bytes, int], None]] = None
 
         # Тезисный помощник
         self.thesis_prompter: Optional[ThesisPrompter] = None
@@ -405,6 +411,13 @@ class LiveVoiceVerifier:
             self._warmup_models()
         except Exception as e:  # noqa: BLE001
             logger.debug(f"Warmup error (ignored): {e}")
+
+    # ==== Внешний приёмник аудио (для гибридной архитектуры) ====
+    def set_audio_sink(self, sink: Callable[[bytes, int], None]) -> None:
+        """Задать внешний приёмник аудио.
+        sink принимает (wav_bytes, sample_rate). Если задан, TTS будет
+        отправляться туда вместо локального воспроизведения."""
+        self._audio_sink = sink
 
     @staticmethod
     def cosine_distance(a: np.ndarray, b: np.ndarray) -> float:
@@ -551,6 +564,17 @@ class LiveVoiceVerifier:
             logger.debug(f"Игнорирую распознанный TTS-хвост: {t}")
             return
         logger.info(f"незнакомый голос (ASR): {t}")
+        # Если включён LLM — генерируем краткий ответ сразу
+        if self.llm_enable and self._llm is not None:
+            try:
+                prompt = t
+                ans = (self._llm.generate(prompt) or "").strip()
+                if ans:
+                    logger.info(f"Ответ: {ans}")
+                    self._speak_text(ans)
+                    return
+            except Exception as e:  # noqa: BLE001
+                logger.exception(f"LLM ошибка при генерации ответа: {e}")
         # Быстрая обработка тезисов через AI
         if self._ai_only_thesis:
             theses = self._extract_theses_ai(t)
@@ -567,10 +591,9 @@ class LiveVoiceVerifier:
                     gemini_min_conf=self._thesis_gemini_min_conf,
                 )
                 self._thesis_done_notified = False
-                # Озвучиваем только первый тезис сразу
-                if limited_theses:
-                    self._speak_text(limited_theses[0])
-                    self._last_announce_ts = time.time()
+                logger.info(f"Тезисы (новые): {', '.join(limited_theses)}")
+                # Анонсируем через общий механизм, чтобы писалось в логи и работал автоповтор
+                self._announce_thesis()
             else:
                 logger.debug("ИИ не нашёл вопросов/тезисов в фрагменте — пропускаю")
             return
@@ -982,17 +1005,16 @@ class LiveVoiceVerifier:
                                 self._enqueue_segment("other", wav, dist)
 
                         # Периодически повторяем текущий тезис, если ещё не закрыт
-                        # Отключаем автоповтор чтобы не мешать пользователю
-                        # try:
-                        #     if (
-                        #         self.thesis_prompter is not None
-                        #         and self.thesis_prompter.has_pending()
-                        #         and (time.time() - self._last_announce_ts) >= self._thesis_repeat_sec
-                        #     ):
-                        #         self.thesis_prompter.reset_announcement()
-                        #         self._announce_thesis()
-                        # except Exception:
-                        #     pass
+                        try:
+                            if (
+                                self.thesis_prompter is not None
+                                and self.thesis_prompter.has_pending()
+                                and (time.time() - self._last_announce_ts) >= self._thesis_repeat_sec
+                            ):
+                                self.thesis_prompter.reset_announcement()
+                                self._announce_thesis()
+                        except Exception:
+                            pass
 
         except KeyboardInterrupt:
             logger.info("Остановлено пользователем")
@@ -1012,7 +1034,8 @@ class LiveVoiceVerifier:
         return self._asr  # type: ignore[return-value]
 
     def _speak_text(self, text: str) -> None:
-        if not text or self._tts is None or sd is None:
+        # Если нет текста или TTS не инициализирован — выходим
+        if not text or self._tts is None:
             return
         try:
             # Базовая валидация: не озвучиваем JSON-подобные ключи и пустые конструкции
@@ -1039,13 +1062,158 @@ class LiveVoiceVerifier:
             duration = float(audio.shape[0]) / float(self._tts.sample_rate)
             # Уменьшаем задержку после TTS
             self._suppress_until = time.time() + duration + 0.05  # вместо 0.1
-            sd.stop()
-            # Используем асинхронное воспроизведение без wait для быстроты
-            sd.play(audio, samplerate=self._tts.sample_rate)
-            # Небольшая задержка только для начала воспроизведения
-            time.sleep(min(0.3, duration * 0.3))  # Ждём только 30% времени
+            # Если задан внешний приёмник — отправим WAV-байты наружу
+            if self._audio_sink is not None:
+                import io, wave  # локальные импорты, чтобы не тянуть при оффлайн-тестах
+                # Конвертируем float32 [-1,1] -> PCM16 и упакуем в WAV для удобства проигрывания в браузере
+                pcm16 = (np.clip(audio, -1.0, 1.0) * 32767.0).astype(np.int16)
+                buf = io.BytesIO()
+                with wave.open(buf, "wb") as wf:
+                    wf.setnchannels(1)
+                    wf.setsampwidth(2)  # 16-bit
+                    wf.setframerate(int(self._tts.sample_rate))
+                    wf.writeframes(pcm16.tobytes())
+                wav_bytes = buf.getvalue()
+                try:
+                    self._audio_sink(wav_bytes, int(self._tts.sample_rate))
+                except Exception as _e:  # noqa: F841, BLE001
+                    logger.debug("Audio sink send failed", _e)
+                # Локального воспроизведения не делаем
+            else:
+                # Фоллбэк: локальное воспроизведение, только если доступен sounddevice
+                if sd is None:
+                    return
+                sd.stop()
+                sd.play(audio, samplerate=self._tts.sample_rate)
+                time.sleep(min(0.3, duration * 0.3))
         except Exception as e:  # noqa: BLE001
             logger.exception(f"TTS ошибка: {e}")
+
+    # ==== Лайв из внешнего потока кадров (20мс) ====
+    def live_verify_stream(
+        self,
+        profile: VoiceProfile,
+        frame_queue: "queue.Queue[np.ndarray]",
+        min_segment_ms: int = 500,
+        max_silence_ms: int = 400,
+        pre_roll_ms: int = 160,
+        run_seconds: float = 0.0,
+        stop_event: Optional[threading.Event] = None,
+    ) -> None:
+        """Аналог live_verify, но вместо микрофона читает кадры из очереди frame_queue.
+        В очередь должны поступать моно float32 фреймы длиной FRAME_SIZE (= 20мс @ 16кГц)."""
+        logger.info("Старт лайв-распознавания (внешний поток кадров)")
+        seg_audio: List[np.ndarray] = []
+        pre_frames: List[np.ndarray] = []
+        pre_roll_frames_cnt = max(0, int(np.ceil(pre_roll_ms / FRAME_MS)))
+        pre_roll = deque(maxlen=pre_roll_frames_cnt)
+        voiced_ms = 0
+        silence_ms = 0
+        in_speech = False
+        consec_speech = 0
+
+        stop_at = time.time() + run_seconds if run_seconds and run_seconds > 0 else None
+        try:
+            self._start_segment_worker()
+            leftover: Optional[np.ndarray] = None
+            while True:
+                if stop_event is not None and stop_event.is_set():
+                    logger.info("Остановка live_verify_stream по сигналу stop_event")
+                    break
+                if stop_at is not None and time.time() >= stop_at:
+                    logger.info("Авто-остановка live_verify_stream по таймеру run_seconds")
+                    break
+                try:
+                    block = frame_queue.get(timeout=0.5)
+                except queue.Empty:
+                    continue
+
+                # подавление самоподхвата во время озвучки
+                if time.time() < self._suppress_until:
+                    continue
+
+                # склеим с хвостом предыдущего блока, если был
+                if leftover is not None and leftover.size > 0:
+                    block = np.concatenate([leftover, block.astype(np.float32).reshape(-1)])
+                    leftover = None
+                else:
+                    block = block.astype(np.float32).reshape(-1)
+
+                i = 0
+                n = block.shape[0]
+                while i + FRAME_SIZE <= n:
+                    frame = block[i : i + FRAME_SIZE]
+                    i += FRAME_SIZE
+                    if pre_roll_frames_cnt > 0:
+                        pre_roll.append(frame.copy())
+                    is_speech = self._vad_fn(frame)
+                    if is_speech:
+                        consec_speech += 1
+                        if not in_speech:
+                            pre_frames.append(frame)
+                            if consec_speech >= self.min_consec_speech_frames:
+                                if pre_roll_frames_cnt > 0 and len(pre_roll) > 0:
+                                    seg_audio.extend(list(pre_roll))
+                                    pre_roll.clear()
+                                seg_audio.extend(pre_frames)
+                                pre_frames.clear()
+                                in_speech = True
+                                voiced_ms = self.min_consec_speech_frames * FRAME_MS
+                        else:
+                            seg_audio.append(frame)
+                            voiced_ms += FRAME_MS
+                        silence_ms = 0
+                    else:
+                        consec_speech = 0
+                        pre_frames.clear()
+                        if in_speech:
+                            silence_ms += FRAME_MS
+
+                    if in_speech and silence_ms >= max_silence_ms:
+                        in_speech = False
+                        total_ms = voiced_ms
+                        wav = (
+                            np.concatenate(seg_audio, axis=0)
+                            if len(seg_audio) > 0
+                            else np.array([], dtype=np.float32)
+                        )
+                        seg_audio.clear()
+                        voiced_ms = 0
+                        silence_ms = 0
+                        if total_ms < min_segment_ms or wav.size < FRAME_SIZE:
+                            continue
+                        sf_med = median_spectral_flatness(wav, SAMPLE_RATE)
+                        if sf_med >= self.flatness_reject_threshold:
+                            continue
+                        wav = self._preprocess_segment(wav, sr=SAMPLE_RATE)
+                        emb = self.embedding_from_waveform(wav)
+                        dist = self.cosine_distance(emb, profile.embedding)
+                        if dist <= self.threshold:
+                            self._enqueue_segment("self", wav, dist)
+                        else:
+                            self._enqueue_segment("other", wav, dist)
+
+                    # периодический повтор тезиса
+                    try:
+                        if (
+                            self.thesis_prompter is not None
+                            and self.thesis_prompter.has_pending()
+                            and (time.time() - self._last_announce_ts) >= self._thesis_repeat_sec
+                        ):
+                            self.thesis_prompter.reset_announcement()
+                            self._announce_thesis()
+                    except Exception:
+                        pass
+
+                # сохраним хвост, если остался неполный кадр
+                if i < n:
+                    leftover = block[i:]
+                else:
+                    leftover = None
+        except KeyboardInterrupt:
+            logger.info("Остановлено пользователем")
+        finally:
+            self._stop_segment_worker()
 
     def _append_question_context(self, text: str) -> None:
         if not text:
@@ -1101,10 +1269,9 @@ class LiveVoiceVerifier:
             gemini_min_conf=self._thesis_gemini_min_conf,
         )
         self._thesis_done_notified = False
-        # Озвучиваем только первый тезис без префиксов
-        if new_items:
-            self._speak_text(new_items[0])
-            self._last_announce_ts = time.time()
+        logger.info(f"Тезисы (новые): {', '.join(new_items)}")
+        # Анонсируем через общий механизм, чтобы писалось в логи и работал автоповтор
+        self._announce_thesis()
 
     def _announce_theses_batch(self, theses: list[str]) -> None:
         if not theses:
@@ -1241,6 +1408,29 @@ class LiveVoiceVerifier:
             except Exception:
                 continue
         return False
+
+    @staticmethod
+    def _compute_age(year: int, month: int, day: int) -> int:
+        """Вычисляет возраст в полных годах на сегодня."""
+        today = date.today()
+        age = today.year - year - (1 if (today.month, today.day) < (month, day) else 0)
+        return int(age)
+
+    @staticmethod
+    def _format_age_ru(age: int) -> str:
+        """Форматирует возраст с корректным склонением: 1 год, 2-4 года, 5+ лет."""
+        n = abs(int(age))
+        last_two = n % 100
+        last = n % 10
+        if 11 <= last_two <= 14:
+            word = "лет"
+        elif last == 1:
+            word = "год"
+        elif 2 <= last <= 4:
+            word = "года"
+        else:
+            word = "лет"
+        return f"{n} {word}"
 
     # ==== Фильтрация вопросов по важности ====
     def _filter_questions_by_importance(self, qs: List[str]) -> List[str]:
