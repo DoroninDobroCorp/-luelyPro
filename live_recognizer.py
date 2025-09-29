@@ -1010,6 +1010,7 @@ class LiveVoiceVerifier:
                                 self.thesis_prompter is not None
                                 and self.thesis_prompter.has_pending()
                                 and (time.time() - self._last_announce_ts) >= self._thesis_repeat_sec
+                                and time.time() >= self._suppress_until
                             ):
                                 self.thesis_prompter.reset_announcement()
                                 self._announce_thesis()
@@ -1052,40 +1053,70 @@ class LiveVoiceVerifier:
             # Должны быть буквы (кириллица/латиница)
             if not any(ch.isalpha() for ch in s):
                 return
-            # Ограничиваем длину текста для скорости
-            if len(s) > 100:
-                s = s[:97] + "..."
+            # Разбиваем длинный текст на фразы, чтобы TTS не обрезался и стартовал быстрее
+            def _split_for_tts(t: str, max_len: int = 180) -> list[str]:
+                parts: list[str] = []
+                # делим по предложениям
+                sent = _re.split(r'([\.\!\?]+\s+)', t)
+                buf = ""
+                for i in range(0, len(sent), 2):
+                    chunk = sent[i]
+                    sep = sent[i + 1] if i + 1 < len(sent) else ""
+                    piece = (chunk + sep).strip()
+                    if not piece:
+                        continue
+                    if len((buf + " " + piece).strip()) <= max_len:
+                        buf = (buf + " " + piece).strip()
+                    else:
+                        if buf:
+                            parts.append(buf)
+                        if len(piece) > max_len:
+                            words = piece.split()
+                            cur = ""
+                            for w in words:
+                                if len((cur + " " + w).strip()) <= max_len:
+                                    cur = (cur + " " + w).strip()
+                                else:
+                                    if cur:
+                                        parts.append(cur)
+                                    cur = w
+                            if cur:
+                                parts.append(cur)
+                            buf = ""
+                        else:
+                            buf = piece
+                if buf:
+                    parts.append(buf)
+                return parts or [t]
 
-            audio = self._tts.synth(s)
-            if audio.size <= 0:
-                return
-            duration = float(audio.shape[0]) / float(self._tts.sample_rate)
-            # Уменьшаем задержку после TTS
-            self._suppress_until = time.time() + duration + 0.05  # вместо 0.1
-            # Если задан внешний приёмник — отправим WAV-байты наружу
-            if self._audio_sink is not None:
-                import io, wave  # локальные импорты, чтобы не тянуть при оффлайн-тестах
-                # Конвертируем float32 [-1,1] -> PCM16 и упакуем в WAV для удобства проигрывания в браузере
-                pcm16 = (np.clip(audio, -1.0, 1.0) * 32767.0).astype(np.int16)
-                buf = io.BytesIO()
-                with wave.open(buf, "wb") as wf:
-                    wf.setnchannels(1)
-                    wf.setsampwidth(2)  # 16-bit
-                    wf.setframerate(int(self._tts.sample_rate))
-                    wf.writeframes(pcm16.tobytes())
-                wav_bytes = buf.getvalue()
-                try:
-                    self._audio_sink(wav_bytes, int(self._tts.sample_rate))
-                except Exception as _e:  # noqa: F841, BLE001
-                    logger.debug("Audio sink send failed", _e)
-                # Локального воспроизведения не делаем
-            else:
-                # Фоллбэк: локальное воспроизведение, только если доступен sounddevice
-                if sd is None:
-                    return
-                sd.stop()
-                sd.play(audio, samplerate=self._tts.sample_rate)
-                time.sleep(min(0.3, duration * 0.3))
+            chunks = _split_for_tts(s)
+
+            for part in chunks:
+                audio = self._tts.synth(part)
+                if audio.size <= 0:
+                    continue
+                duration = float(audio.shape[0]) / float(self._tts.sample_rate)
+                self._suppress_until = time.time() + duration + 0.05
+                if self._audio_sink is not None:
+                    import io, wave
+                    pcm16 = (np.clip(audio, -1.0, 1.0) * 32767.0).astype(np.int16)
+                    buf = io.BytesIO()
+                    with wave.open(buf, "wb") as wf:
+                        wf.setnchannels(1)
+                        wf.setsampwidth(2)
+                        wf.setframerate(int(self._tts.sample_rate))
+                        wf.writeframes(pcm16.tobytes())
+                    wav_bytes = buf.getvalue()
+                    try:
+                        self._audio_sink(wav_bytes, int(self._tts.sample_rate))
+                    except Exception as _e:  # noqa: F841, BLE001
+                        logger.debug("Audio sink send failed", _e)
+                else:
+                    if sd is None:
+                        continue
+                    sd.stop()
+                    sd.play(audio, samplerate=self._tts.sample_rate)
+                    time.sleep(min(0.3, duration * 0.3))
         except Exception as e:  # noqa: BLE001
             logger.exception(f"TTS ошибка: {e}")
 
@@ -1199,6 +1230,7 @@ class LiveVoiceVerifier:
                             self.thesis_prompter is not None
                             and self.thesis_prompter.has_pending()
                             and (time.time() - self._last_announce_ts) >= self._thesis_repeat_sec
+                            and time.time() >= self._suppress_until
                         ):
                             self.thesis_prompter.reset_announcement()
                             self._announce_thesis()
@@ -1540,14 +1572,14 @@ class LiveVoiceVerifier:
                 prompt = json.dumps({"transcript": t}, ensure_ascii=False)
                 cfg = types.GenerateContentConfig(
                     system_instruction=sys_instr,
-                    max_output_tokens=128,  # Меньше токенов
+                    max_output_tokens=64,
                     temperature=0.0,
-                    top_p=0.8,  # Меньше разнообразия
+                    top_p=0.8,
                     thinking_config=types.ThinkingConfig(thinking_budget=0),
                     response_mime_type="application/json",
                 )
                 resp = client.models.generate_content(
-                    model="gemini-2.0-flash",  # Стабильная модель
+                    model="gemini-2.5-flash-lite",
                     contents=[types.Content(role="user", parts=[types.Part.from_text(text=prompt)])],
                     config=cfg,
                 )

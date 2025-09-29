@@ -461,8 +461,8 @@ def main() -> None:
             vad_backend="webrtc",
             silero_vad_threshold=0.5,
             silero_vad_window_ms=100,
-            min_segment_ms=400,  # Меньше минимальный сегмент
-            max_silence_ms=300,  # Быстрее реагируем на паузы
+            min_segment_ms=300,  # короче сегмент
+            max_silence_ms=150,  # быстрее завершаем по паузе
             pre_roll_ms=100,  # Меньше предзахват
             asr=True,
             asr_model=os.getenv("ASR_MODEL", "tiny"),  # Меньшая модель для скорости
