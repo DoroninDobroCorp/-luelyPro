@@ -1,26 +1,158 @@
-2025-09-29 16:11:20.501 | INFO     | live_recognizer:setup_logging:105 - Логи пишутся в /Users/vladimirdoronin/VovkaNowEngineer/CluelyPro/logs/assistant.log
-2025-09-29 16:11:20.514 | INFO     | live_recognizer:__init__:366 - Статические тезисы не найдены (файл theses.txt отсутствует или пуст) — будет использоваться автогенерация
-2025-09-29 16:11:20.650 | INFO     | thesis_generator:__init__:41 - ThesisGenerator инициализирован: model=gemini-2.5-flash-lite
-2025-09-29 16:11:20.650 | INFO     | live_recognizer:__init__:373 - Автогенерация тезисов Gemini включена
-2025-09-29 16:11:20.650 | INFO     | asr_transcriber:_init:103 - Loading faster-whisper model=small device=cpu compute_type=int8 lang=ru
-2025-09-29 16:11:21.778 | INFO     | llm_answer:__init__:70 - LLM (Gemini) инициализирован: model=gemini-2.5-flash-lite
-2025-09-29 16:11:21.778 | INFO     | tts_silero:__init__:44 - Загрузка Silero TTS: lang=ru, model_id=v4_ru, speaker=eugene, sr=24000, device=cpu
-2025-09-29 16:11:22.840 | INFO     | live_recognizer:__init__:405 - LiveVoiceVerifier initialized | model=speechbrain/spkrec-ecapa-voxceleb, device=cpu, threshold=0.75, VAD=webrtc
-2025-09-29 16:11:26.177 | INFO     | live_recognizer:live_verify:912 - Старт лайв-распознавания. Нажмите Ctrl+C для остановки. Говорите в микрофон.
-2025-09-29 16:11:32.669 | INFO     | live_recognizer:_handle_self_segment:536 - мой голос
-2025-09-29 16:11:34.280 | INFO     | live_recognizer:_handle_self_transcript:614 - Моя речь (ASR): Сколько будет 2 плюс 2
-2025-09-29 16:11:34.280 | DEBUG    | live_recognizer:_handle_self_transcript:616 - Тезисный помощник не активен — пропускаю самоанализ
-2025-09-29 16:11:41.293 | INFO     | live_recognizer:_handle_self_segment:536 - мой голос
-2025-09-29 16:11:42.649 | INFO     | live_recognizer:_handle_self_transcript:614 - Моя речь (ASR): Скажите а сколько будет три плюс три
-2025-09-29 16:11:42.650 | DEBUG    | live_recognizer:_handle_self_transcript:616 - Тезисный помощник не активен — пропускаю самоанализ
-2025-09-29 16:11:44.630 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
-2025-09-29 16:11:50.380 | INFO     | live_recognizer:_handle_foreign_text:566 - незнакомый голос (ASR): Сколько будет Четыре плюс четыре.
-2025-09-29 16:11:50.956 | INFO     | live_recognizer:_handle_foreign_text:573 - Ответ: Восемь.
-2025-09-29 16:11:54.160 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
-2025-09-29 16:11:57.699 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
-2025-09-29 16:12:05.010 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
-2025-09-29 16:12:10.767 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
-2025-09-29 16:12:12.540 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
-2025-09-29 16:12:17.113 | INFO     | live_recognizer:_handle_foreign_text:566 - незнакомый голос (ASR): Когда появился Дед Мороз
-2025-09-29 16:12:17.844 | INFO     | live_recognizer:_handle_foreign_text:573 - Ответ: История Деда Мороза как персонажа, дарящего подарки, уходит корнями в советское время. Его образ окончательно сформировался в тридцатых годах двадцатого века.
-2025-09-29 16:12:35.814 | INFO     | live_recognizer:live_verify:1020 - Остановлено пользователем
+2025-09-29 16:34:45.963 | INFO     | live_recognizer:setup_logging:105 - Логи пишутся в /Users/vladimirdoronin/VovkaNowEngineer/CluelyPro/logs/assistant.log
+2025-09-29 16:34:45.964 | INFO     | live_recognizer:__init__:366 - Статические тезисы не найдены (файл theses.txt отсутствует или пуст) — будет использоваться автогенерация
+2025-09-29 16:34:46.041 | INFO     | thesis_generator:__init__:41 - ThesisGenerator инициализирован: model=gemini-2.5-flash-lite
+2025-09-29 16:34:46.042 | INFO     | live_recognizer:__init__:373 - Автогенерация тезисов Gemini включена
+2025-09-29 16:34:46.042 | INFO     | asr_transcriber:_init:103 - Loading faster-whisper model=tiny device=cpu compute_type=int8 lang=ru
+2025-09-29 16:34:46.853 | INFO     | llm_answer:__init__:70 - LLM (Gemini) инициализирован: model=gemini-2.5-flash-lite
+2025-09-29 16:34:46.853 | INFO     | tts_silero:__init__:44 - Загрузка Silero TTS: lang=ru, model_id=v4_ru, speaker=eugene, sr=24000, device=cpu
+2025-09-29 16:34:47.935 | INFO     | live_recognizer:__init__:405 - LiveVoiceVerifier initialized | model=speechbrain/spkrec-ecapa-voxceleb, device=cpu, threshold=0.75, VAD=webrtc
+2025-09-29 16:34:50.034 | INFO     | live_recognizer:live_verify:912 - Старт лайв-распознавания. Нажмите Ctrl+C для остановки. Говорите в микрофон.
+2025-09-29 16:34:51.926 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:34:55.582 | INFO     | live_recognizer:_handle_self_segment:536 - мой голос
+2025-09-29 16:35:06.205 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:35:07.116 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:35:10.968 | INFO     | live_recognizer:_handle_foreign_text:566 - незнакомый голос (ASR): Здравствуйте это тест
+2025-09-29 16:35:11.568 | INFO     | live_recognizer:_handle_foreign_text:573 - Ответ: Нет явного вопроса к кандидату.
+2025-09-29 16:35:19.982 | INFO     | live_recognizer:_handle_foreign_text:566 - незнакомый голос (ASR): Сколько будет вопрос 2
+2025-09-29 16:35:20.283 | INFO     | live_recognizer:_handle_foreign_text:573 - Ответ: Нет явного вопроса к кандидату.
+2025-09-29 16:35:22.634 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:35:25.859 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:35:29.457 | INFO     | live_recognizer:_handle_self_segment:536 - мой голос
+2025-09-29 16:35:29.686 | INFO     | live_recognizer:_handle_self_transcript:614 - Моя речь (ASR): В каком году родился Брежнев
+2025-09-29 16:35:29.687 | DEBUG    | live_recognizer:_handle_self_transcript:616 - Тезисный помощник не активен — пропускаю самоанализ
+2025-09-29 16:35:33.323 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:35:35.984 | INFO     | live_recognizer:_handle_self_segment:536 - мой голос
+2025-09-29 16:35:36.236 | INFO     | live_recognizer:_handle_self_transcript:614 - Моя речь (ASR): Как вам дадородился Брежнев
+2025-09-29 16:35:36.236 | DEBUG    | live_recognizer:_handle_self_transcript:616 - Тезисный помощник не активен — пропускаю самоанализ
+2025-09-29 16:35:43.805 | INFO     | live_recognizer:_handle_self_segment:536 - мой голос
+2025-09-29 16:35:44.054 | INFO     | live_recognizer:_handle_self_transcript:614 - Моя речь (ASR): Кохом году родился брежнев.
+2025-09-29 16:35:44.054 | DEBUG    | live_recognizer:_handle_self_transcript:616 - Тезисный помощник не активен — пропускаю самоанализ
+2025-09-29 16:35:47.524 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:35:51.624 | INFO     | live_recognizer:_handle_self_segment:536 - мой голос
+2025-09-29 16:35:51.962 | INFO     | live_recognizer:_handle_self_transcript:614 - Моя речь (ASR): Каком Гореловер-Абилсия Брежна.
+2025-09-29 16:35:51.963 | DEBUG    | live_recognizer:_handle_self_transcript:616 - Тезисный помощник не активен — пропускаю самоанализ
+2025-09-29 16:35:57.607 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:36:04.278 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:36:07.731 | INFO     | live_recognizer:_handle_self_segment:536 - мой голос
+2025-09-29 16:36:07.998 | INFO     | live_recognizer:_handle_self_transcript:614 - Моя речь (ASR): Как вам угаду Радился Брежнев.
+2025-09-29 16:36:07.999 | DEBUG    | live_recognizer:_handle_self_transcript:616 - Тезисный помощник не активен — пропускаю самоанализ
+2025-09-29 16:36:12.714 | INFO     | live_recognizer:_handle_self_segment:536 - мой голос
+2025-09-29 16:36:12.949 | INFO     | live_recognizer:_handle_self_transcript:614 - Моя речь (ASR): В каком году родился Брежнев
+2025-09-29 16:36:12.949 | DEBUG    | live_recognizer:_handle_self_transcript:616 - Тезисный помощник не активен — пропускаю самоанализ
+2025-09-29 16:36:19.521 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:36:24.794 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:36:28.258 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:36:30.997 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:36:32.162 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:36:34.710 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:36:45.159 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:36:52.387 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:36:53.831 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:37:07.164 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:37:13.732 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:37:16.313 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:37:21.758 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:37:24.688 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:37:30.364 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:37:36.469 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:37:39.591 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:37:41.663 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:37:43.587 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:37:45.124 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:37:47.398 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:37:49.264 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:37:51.971 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:37:53.214 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:37:54.229 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:37:55.971 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:37:59.318 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:38:04.085 | INFO     | live_recognizer:_handle_foreign_text:566 - незнакомый голос (ASR): ДИНАМИЧНАЯ МУЗЫКА
+2025-09-29 16:38:04.573 | INFO     | live_recognizer:_handle_foreign_text:573 - Ответ: Нет явного вопроса к кандидату.
+2025-09-29 16:38:08.078 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:38:11.341 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:38:14.263 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:38:22.426 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:38:23.797 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:38:26.639 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:38:36.251 | INFO     | live_recognizer:_handle_foreign_text:566 - незнакомый голос (ASR): СПОКОЙНАЯ МУЗЫКА
+2025-09-29 16:38:36.571 | INFO     | live_recognizer:_handle_foreign_text:573 - Ответ: Нет явного вопроса к кандидату.
+2025-09-29 16:38:44.749 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:38:50.808 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:38:55.384 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:38:56.644 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:38:59.691 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:39:01.273 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:39:01.887 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:39:03.013 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:39:05.525 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:39:06.468 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:39:07.060 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:39:10.201 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:39:12.015 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:39:14.303 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:39:15.651 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:39:17.016 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:39:23.207 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:39:25.185 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:39:30.480 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:39:33.807 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:39:34.261 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:39:37.772 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:39:38.743 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:39:46.455 | INFO     | live_recognizer:_handle_foreign_text:566 - незнакомый голос (ASR): Точно добавлены а дна я сделаю все-давно а ты как-то запишешься а принимал и не жать а принимать а принимать.
+2025-09-29 16:39:47.145 | INFO     | live_recognizer:_handle_foreign_text:573 - Ответ: Нет явного вопроса к кандидату.
+2025-09-29 16:39:49.777 | INFO     | live_recognizer:_handle_foreign_text:566 - незнакомый голос (ASR): Что-то попробуем из меня но запятую что-то я вам не пишу.
+2025-09-29 16:39:49.992 | INFO     | live_recognizer:_handle_foreign_text:573 - Ответ: Нет явного вопроса к кандидату.
+2025-09-29 16:40:02.611 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:40:06.376 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:40:08.135 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:40:15.167 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:40:16.203 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:40:29.188 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:40:33.372 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:40:36.520 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:40:40.353 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:40:45.707 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:40:48.790 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:40:53.419 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:40:57.931 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:41:02.746 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:41:06.434 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:41:11.494 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:41:16.529 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:41:20.249 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:41:22.034 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:41:25.901 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:41:34.166 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:41:37.661 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:41:44.590 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:41:47.529 | INFO     | live_recognizer:_handle_self_segment:536 - мой голос
+2025-09-29 16:41:47.754 | INFO     | live_recognizer:_handle_self_transcript:614 - Моя речь (ASR): Как он готову родился брежнев
+2025-09-29 16:41:47.754 | DEBUG    | live_recognizer:_handle_self_transcript:616 - Тезисный помощник не активен — пропускаю самоанализ
+2025-09-29 16:41:51.280 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:41:52.470 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:41:53.308 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:42:00.378 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:42:01.999 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:42:05.735 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:42:06.791 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:42:07.864 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:42:10.525 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:42:15.434 | INFO     | live_recognizer:_handle_self_segment:536 - мой голос
+2025-09-29 16:42:15.721 | INFO     | live_recognizer:_handle_self_transcript:614 - Моя речь (ASR): Просим меня в каком году родился Брежник.
+2025-09-29 16:42:15.722 | DEBUG    | live_recognizer:_handle_self_transcript:616 - Тезисный помощник не активен — пропускаю самоанализ
+2025-09-29 16:42:18.003 | INFO     | live_recognizer:_handle_foreign_text:566 - незнакомый голос (ASR): А нежно.
+2025-09-29 16:42:18.345 | INFO     | live_recognizer:_handle_foreign_text:573 - Ответ: Нет явного вопроса к кандидату.
+2025-09-29 16:42:26.525 | INFO     | live_recognizer:_handle_self_segment:536 - мой голос
+2025-09-29 16:42:26.938 | INFO     | live_recognizer:_handle_self_transcript:614 - Моя речь (ASR): Так ты спроси меня ты меня спроси. Повторие этот вопрос в голову с голос.
+2025-09-29 16:42:26.939 | DEBUG    | live_recognizer:_handle_self_transcript:616 - Тезисный помощник не активен — пропускаю самоанализ
+2025-09-29 16:42:29.138 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:42:33.392 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:42:38.784 | INFO     | live_recognizer:_handle_foreign_text:566 - незнакомый голос (ASR): Какаком году Редют.
+2025-09-29 16:42:39.164 | INFO     | live_recognizer:_handle_foreign_text:573 - Ответ: Нет явного вопроса к кандидату.
+2025-09-29 16:42:42.482 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:42:43.085 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:42:44.664 | INFO     | live_recognizer:_handle_foreign_text:561 - незнакомый голос (ASR: пусто)
+2025-09-29 16:42:46.632 | INFO     | live_recognizer:_handle_foreign_text:566 - незнакомый голос (ASR): Он родился
+2025-09-29 16:42:47.289 | INFO     | live_recognizer:_handle_foreign_text:573 - Ответ: Нет явного вопроса к кандидату.
+2025-09-29 16:44:40.824 | INFO     | live_recognizer:live_verify:1021 - Остановлено пользователем

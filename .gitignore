@@ -17,8 +17,8 @@ profiles/*.npz
 *.npz
 
 # Env files
-.env
-.env.local
+#.env
+#.env.local
 
 # Locks / caches
 uv.lock
