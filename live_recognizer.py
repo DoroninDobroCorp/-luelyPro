@@ -564,12 +564,32 @@ class LiveVoiceVerifier:
             logger.debug(f"Игнорирую распознанный TTS-хвост: {t}")
             return
         logger.info(f"незнакомый голос (ASR): {t}")
+        # Быстрый хэндлер простых математических запросов
+        try:
+            math_ans = self._answer_math_if_any(t)
+        except Exception:
+            math_ans = None
+        if math_ans:
+            logger.info(f"Ответ: {math_ans}")
+            self._speak_text(math_ans)
+            return
+        # Жёсткие исключения: некоторые триггеры не считаем вопросами и не обрабатываем
+        try:
+            if self._should_ignore_non_question_text(t):
+                logger.debug("Игнорирую нерелевантный триггер (музыка и т.п.)")
+                return
+        except Exception:
+            pass
         # Если включён LLM — генерируем краткий ответ сразу
         if self.llm_enable and self._llm is not None:
             try:
                 prompt = t
                 ans = (self._llm.generate(prompt) or "").strip()
                 if ans:
+                    try:
+                        ans = self._enforce_answer_then_question(ans)
+                    except Exception:
+                        pass
                     logger.info(f"Ответ: {ans}")
                     self._speak_text(ans)
                     return
@@ -606,6 +626,114 @@ class LiveVoiceVerifier:
             self._maybe_generate_theses()
         else:
             logger.debug("Пропускаю нерелевантный/не-вопрос текст собеседника")
+
+    @staticmethod
+    def _answer_math_if_any(text: str) -> Optional[str]:
+        """Распознаёт простые математические фразы и строит ответ.
+        Сейчас поддерживается шаблон: "<int> в степени <int>".
+        Возвращает готовую фразу вида: "<результат> будет <основание> в степени <показатель>".
+        """
+        if not text:
+            return None
+        import re
+        t = text.strip().lower()
+        # Наиболее частотный и однозначный паттерн: цифры + "в степени" + цифры
+        m = re.search(r"\b(\d{1,9})\s+в\s+степен[еи]\s+(\d{1,3})\b", t)
+        if not m:
+            return None
+        try:
+            base = int(m.group(1))
+            exp = int(m.group(2))
+        except Exception:
+            return None
+        # Защита от чрезмерно больших расчётов
+        if exp > 1000:
+            return None
+        try:
+            res = pow(base, exp)
+        except Exception:
+            return None
+        # Сформируем человекочитаемую фразу: сначала ответ, затем пояснение
+        base_w = None
+        exp_w = None
+        try:
+            from num2words import num2words  # type: ignore
+            base_w = num2words(base, lang="ru")
+            exp_w = num2words(exp, lang="ru")
+        except Exception:
+            pass
+        base_part = base_w if base_w else str(base)
+        exp_part = exp_w if exp_w else str(exp)
+        # Если число слишком длинное, не озвучиваем все цифры
+        res_s = str(res)
+        if len(res_s) > 30:
+            # Дадим компактную оценку в научной форме
+            try:
+                import math as _math
+                # mantissa * 10^k
+                k = len(res_s) - 1
+                mantissa = float(res_s[0] + "." + res_s[1: min(6, len(res_s))])
+                approx = f"примерно {mantissa:.3f} на десять в степени {k}"
+                return f"{approx}. {base_part} в степени {exp_part}."
+            except Exception:
+                return f"Число очень большое. {base_part} в степени {exp_part}."
+        return f"{res_s} будет {base_part} в степени {exp_part}."
+
+    @staticmethod
+    def _should_ignore_non_question_text(text: str) -> bool:
+        """Фильтр явных нерелевантных триггеров, которые не надо трактовать как вопросы.
+        Примеры: "динамичная музыка", "динамическая музыка" и т.п.
+        """
+        if not text:
+            return False
+        import re
+        s = text.strip().lower()
+        patterns = [
+            r"\bдинамич\w*\s+музык\w*\b",
+        ]
+        for p in patterns:
+            try:
+                if re.search(p, s):
+                    return True
+            except Exception:
+                continue
+        return False
+
+    @staticmethod
+    def _enforce_answer_then_question(text: str) -> str:
+        """Переставляет вопросительные предложения в конец, сначала оставляя ответ.
+        Разделяет по предложениям, сохраняет порядок внутри групп.
+        """
+        if not text:
+            return text
+        import re
+        s = text.strip()
+        # Быстро нормализуем переносы
+        s = re.sub(r"\s+", " ", s)
+        # Разбиваем на предложения, сохранив разделители
+        parts = re.split(r"([\.!?]+\s+)", s)
+        # Сконструируем список предложений с их финальным пунктуационным знаком
+        sentences = []
+        for i in range(0, len(parts), 2):
+            chunk = parts[i].strip()
+            sep = parts[i+1] if i+1 < len(parts) else ""
+            sent = (chunk + (sep or "")).strip()
+            if sent:
+                sentences.append(sent)
+        if not sentences:
+            return s
+        declarative: list[str] = []
+        questions: list[str] = []
+        for sent in sentences:
+            if sent.endswith("?"):
+                questions.append(sent)
+            else:
+                declarative.append(sent)
+        if not declarative:
+            # Если все — вопросы, вернём как есть
+            return s
+        out = " ".join(declarative + questions).strip()
+        return out
 
     def _handle_self_transcript(self, transcript: Optional[str]) -> None:
         t = (transcript or "").strip()
@@ -1046,6 +1174,16 @@ class LiveVoiceVerifier:
             # Удалим внешние кавычки
             if (s.startswith('"') and s.endswith('"')) or (s.startswith("'") and s.endswith("'")):
                 s = s[1:-1].strip()
+            # Специальное подавление: не озвучиваем служебное уведомление,
+            # а только логируем его
+            try:
+                if "прямых вопросов пользователю не обнаружено" in s.lower():
+                    logger.info("прямых вопросов пользователю не обнаружено")
+                    return
+            except Exception:
+                # На всякий случай, даже если что-то пойдёт не так при проверке
+                # строки — не блокируем основную логику
+                pass
             # Пропускаем строки вида "theses": [], а также любые ключ: значение без нормального текста
             import re as _re
             if _re.match(r'^"?\w+"?\s*:\s*(\[.*\]|\{.*\}|".*"|\d+|true|false|null)?\s*$', s, flags=_re.IGNORECASE):
