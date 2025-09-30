@@ -333,20 +333,33 @@ class LiveVoiceVerifier:
         self._segment_queue: "queue.Queue[QueuedSegment]" = queue.Queue(maxsize=4)
         self._segment_worker: Optional[threading.Thread] = None
         self._segment_stop = threading.Event()
+        # Фоновый повтор тезиса независимо от прихода аудио
+        self._thesis_repeat_worker: Optional[threading.Thread] = None
+        self._thesis_repeat_stop = threading.Event()
+        # Индекс для циклического объявления оставшихся тезисов
+        self._thesis_cycle_idx: int = 0
         # Как часто повторять текущий тезис (секунды), если он ещё не закрыт
         try:
-            # Увеличиваем интервал повторения чтобы не мешать
-            self._thesis_repeat_sec: float = float(os.getenv("THESIS_REPEAT_SEC", "30"))
+            # Интервал повтора текущего тезиса (сек)
+            self._thesis_repeat_sec: float = float(os.getenv("THESIS_REPEAT_SEC", "10"))
         except Exception:
-            self._thesis_repeat_sec = 30.0
+            self._thesis_repeat_sec = 10.0
         # Фильтрация «не-вопросов»: heuristic | gemini (по умолчанию gemini)
         self._question_filter_mode: str = os.getenv("QUESTION_FILTER_MODE", "gemini").strip().lower()
         try:
             self._question_min_len: int = int(os.getenv("QUESTION_MIN_LEN", "8"))
         except Exception:
             self._question_min_len = 8
+        # Управление добавлением исходного вопроса к ответу LLM (по умолчанию выкл)
+        try:
+            _aq = os.getenv("APPEND_QUESTION_TO_ANSWER", "0").strip().lower()
+            self._append_question_to_answer: bool = _aq in ("1", "true", "yes", "on")
+        except Exception:
+            self._append_question_to_answer = False
         # Режим: исключительно ИИ-экстракция тезисов из чужой речи
         self._ai_only_thesis: bool = os.getenv("AI_ONLY_THESIS", "1").strip() not in ("0", "false", "False")
+        # Новый режим комментариев: генерировать короткие факт-заметки даже без явных вопросов
+        self._commentary_mode: bool = os.getenv("COMMENTARY_MODE", "0").strip() not in ("0", "false", "False", "no", "No")
         if theses_path:
             theses_list = self._load_theses(Path(theses_path))
             if theses_list:
@@ -483,6 +496,8 @@ class LiveVoiceVerifier:
             daemon=True,
         )
         self._segment_worker.start()
+        # Запускаем фонового повторителя тезисов
+        self._start_thesis_repeater()
 
     def _stop_segment_worker(self) -> None:
         self._segment_stop.set()
@@ -495,6 +510,69 @@ class LiveVoiceVerifier:
                 self._segment_queue.task_done()
             except queue.Empty:
                 break
+        # Останавливаем фонового повторителя тезисов
+        self._stop_thesis_repeater()
+
+    def _start_thesis_repeater(self) -> None:
+        if self._thesis_repeat_worker and self._thesis_repeat_worker.is_alive():
+            return
+        self._thesis_repeat_stop.clear()
+        self._thesis_repeat_worker = threading.Thread(
+            target=self._thesis_repeater_loop,
+            name="thesis-repeater",
+            daemon=True,
+        )
+        self._thesis_repeat_worker.start()
+
+    def _stop_thesis_repeater(self) -> None:
+        self._thesis_repeat_stop.set()
+        if self._thesis_repeat_worker is not None:
+            self._thesis_repeat_worker.join(timeout=2.0)
+            self._thesis_repeat_worker = None
+
+    def _thesis_repeater_loop(self) -> None:
+        # Периодическая проверка необходимости повторить тезис, даже в тишине
+        while not self._thesis_repeat_stop.is_set():
+            try:
+                time_since_last = time.time() - self._last_announce_ts
+                has_pending = self.thesis_prompter is not None and self.thesis_prompter.has_pending()
+                not_suppressed = time.time() >= self._suppress_until
+                
+                if has_pending and time_since_last >= self._thesis_repeat_sec and not_suppressed:
+                    logger.debug(f"Повтор тезиса через {time_since_last:.1f}с (интервал={self._thesis_repeat_sec}с)")
+                    self._announce_next_thesis_in_cycle()
+            except Exception as e:
+                logger.debug(f"Ошибка в thesis_repeater: {e}")
+            # Частота опроса небольшая, чтобы не грузить CPU
+            time.sleep(0.2)
+
+    def _announce_next_thesis_in_cycle(self) -> None:
+        tp = self.thesis_prompter
+        if tp is None or not tp.has_pending():
+            return
+        # синхронизация индекса цикла с первым незакрытым
+        start_idx = getattr(tp, "_index", 0)
+        total = len(getattr(tp, "theses", []))
+        if self._thesis_cycle_idx < start_idx or self._thesis_cycle_idx >= total:
+            self._thesis_cycle_idx = start_idx
+        # объявляем следующий по циклу как текущий
+        try:
+            setattr(tp, "_index", self._thesis_cycle_idx)
+        except Exception:
+            pass
+        tp.reset_announcement()
+        self._announce_thesis()
+        # вычисляем следующий индекс цикла среди оставшихся
+        # если в процессе текущий тезис закрылся, _index сдвинется
+        start_idx2 = getattr(tp, "_index", start_idx)
+        total2 = len(getattr(tp, "theses", []))
+        if not tp.has_pending():
+            self._thesis_cycle_idx = 0
+            return
+        # следующий — это max(current_index, previous+1)
+        self._thesis_cycle_idx = max(start_idx2, self._thesis_cycle_idx + 1)
+        if self._thesis_cycle_idx >= total2:
+            self._thesis_cycle_idx = start_idx2
 
     def _enqueue_segment(self, kind: str, audio: np.ndarray, distance: float = 0.0) -> None:
         if audio.size == 0:
@@ -580,6 +658,27 @@ class LiveVoiceVerifier:
                 return
         except Exception:
             pass
+        # Режим комментариев: генерируем короткие факт-заметки даже без явных вопросов
+        if getattr(self, "_commentary_mode", False):
+            try:
+                facts = self._extract_commentary_facts(t)
+            except Exception:
+                facts = []
+            if facts:
+                items = facts[: min(3, len(facts))]
+                self.thesis_prompter = ThesisPrompter(
+                    theses=items,
+                    match_threshold=self._thesis_match_threshold,
+                    enable_semantic=False,
+                    semantic_threshold=self._thesis_semantic_threshold,
+                    semantic_model_id=self._thesis_semantic_model,
+                    enable_gemini=False,
+                    gemini_min_conf=self._thesis_gemini_min_conf,
+                )
+                self._thesis_done_notified = False
+                logger.info(f"Комментарии (новые): {', '.join(items)}")
+                self._announce_thesis()
+                return
         # Если включён LLM — генерируем краткий ответ сразу
         if self.llm_enable and self._llm is not None:
             try:
@@ -590,6 +689,19 @@ class LiveVoiceVerifier:
                         ans = self._enforce_answer_then_question(ans)
                     except Exception:
                         pass
+                    # По желанию можно добавить исходный вопрос в конец ответа
+                    if getattr(self, "_append_question_to_answer", False):
+                        try:
+                            import re
+                            qs = self._extract_questions(t)
+                            if qs:
+                                q_joined = " ".join(qs).strip()
+                                # Добавим вопрос, если его ещё нет в тексте ответа
+                                norm = lambda x: re.sub(r"[\s\.!?]+", " ", (x or "").strip().lower())
+                                if norm(q_joined) not in norm(ans):
+                                    ans = f"{ans} {q_joined}".strip()
+                        except Exception:
+                            pass
                     logger.info(f"Ответ: {ans}")
                     self._speak_text(ans)
                     return
@@ -679,6 +791,56 @@ class LiveVoiceVerifier:
                 return f"Число очень большое. {base_part} в степени {exp_part}."
         return f"{res_s} будет {base_part} в степени {exp_part}."
 
+    def _extract_commentary_facts(self, text: str) -> List[str]:
+        """Возвращает список коротких факт-заметок по теме реплики собеседника.
+        Даже если нет явного вопроса. Использует контракт JSON через _parse_theses_from_raw.
+        """
+        t = (text or "").strip()
+        if not t:
+            return []
+        try:
+            import json
+            from google import genai  # type: ignore
+            from google.genai import types  # type: ignore
+            key = os.getenv("GEMINI_API_KEY")
+            if not key:
+                return []
+            client = genai.Client(api_key=key)
+
+            def _call_and_parse(force_json_start: bool = False) -> List[str]:
+                sys_instr = (
+                    "Ты — ассистент-комментатор. Слушай короткие реплики собеседника и формируй"
+                    " 2–3 интересных, уместных факт-заметки по теме (история, контекст, определения, цифры)."
+                    " Если тема личная/бытовая и не подходит — верни пустой список."
+                    " Формат ответа строго JSON: {\"theses\": [\"...\"]}."
+                )
+                if force_json_start:
+                    sys_instr += " Ответ ДОЛЖЕН начинаться с символа { и не содержать ничего кроме JSON."
+                prompt = json.dumps({"transcript": t}, ensure_ascii=False)
+                cfg = types.GenerateContentConfig(
+                    system_instruction=sys_instr,
+                    max_output_tokens=96,
+                    temperature=0.2,
+                    top_p=0.9,
+                    thinking_config=types.ThinkingConfig(thinking_budget=0),
+                    response_mime_type="application/json",
+                )
+                resp = client.models.generate_content(
+                    model="gemini-2.5-flash-lite",
+                    contents=[types.Content(role="user", parts=[types.Part.from_text(text=prompt)])],
+                    config=cfg,
+                )
+                raw = (resp.text or "").strip()
+                return LiveVoiceVerifier._parse_theses_from_raw(raw, n_max=3)
+
+            out = _call_and_parse(False)
+            if not out:
+                out = _call_and_parse(True)
+            return out
+        except Exception as e:  # noqa: BLE001
+            logger.debug(f"Commentary extraction failed: {e}")
+            return []
+
     @staticmethod
     def _should_ignore_non_question_text(text: str) -> bool:
         """Фильтр явных нерелевантных триггеров, которые не надо трактовать как вопросы.
@@ -701,38 +863,56 @@ class LiveVoiceVerifier:
 
     @staticmethod
     def _enforce_answer_then_question(text: str) -> str:
-        """Переставляет вопросительные предложения в конец, сначала оставляя ответ.
-        Разделяет по предложениям, сохраняет порядок внутри групп.
+        """Удаляет вопросительные предложения из ответа, оставляя только факт-ответ.
+        Разделяет по предложениям, сохраняет порядок внутри группы утверждений.
+        Если утвердительных предложений не найдено — возвращает исходный текст.
         """
         if not text:
             return text
         import re
         s = text.strip()
-        # Быстро нормализуем переносы
         s = re.sub(r"\s+", " ", s)
-        # Разбиваем на предложения, сохранив разделители
         parts = re.split(r"([\.!?]+\s+)", s)
-        # Сконструируем список предложений с их финальным пунктуационным знаком
-        sentences = []
+        sentences: list[str] = []
         for i in range(0, len(parts), 2):
             chunk = parts[i].strip()
-            sep = parts[i+1] if i+1 < len(parts) else ""
+            sep = parts[i + 1] if i + 1 < len(parts) else ""
             sent = (chunk + (sep or "")).strip()
             if sent:
                 sentences.append(sent)
         if not sentences:
             return s
+
+        def _is_question_like(t: str) -> bool:
+            if not t:
+                return False
+            t2 = t.strip().lower()
+            if t2.endswith("?"):
+                return True
+            # Частые русские вопросительные конструкции даже без знака вопроса
+            patterns = [
+                r"^кто\b", r"^что\b", r"^когда\b", r"^где\b", r"^почему\b", r"^зачем\b",
+                r"^как\b", r"^какой\b", r"^какова\b", r"^котор\w*\b", r"^сколько\b",
+                r"^в каком году\b", r"^правда ли\b", r"^можно ли\b", r"^верно ли\b",
+            ]
+            for p in patterns:
+                try:
+                    if re.search(p, t2):
+                        return True
+                except Exception:
+                    continue
+            return False
+
         declarative: list[str] = []
         questions: list[str] = []
         for sent in sentences:
-            if sent.endswith("?"):
+            if _is_question_like(sent):
                 questions.append(sent)
             else:
                 declarative.append(sent)
         if not declarative:
-            # Если все — вопросы, вернём как есть
             return s
-        out = " ".join(declarative + questions).strip()
+        out = " ".join(declarative).strip()
         return out
 
     def _handle_self_transcript(self, transcript: Optional[str]) -> None:
@@ -1132,13 +1312,14 @@ class LiveVoiceVerifier:
                             else:
                                 self._enqueue_segment("other", wav, dist)
 
-                        # Периодически повторяем текущий тезис, если ещё не закрыт
+                        # Периодически повторяем текущий тезис, если ещё не закрыт (если нет фонового повторителя)
                         try:
                             if (
                                 self.thesis_prompter is not None
                                 and self.thesis_prompter.has_pending()
                                 and (time.time() - self._last_announce_ts) >= self._thesis_repeat_sec
                                 and time.time() >= self._suppress_until
+                                and not (self._thesis_repeat_worker and self._thesis_repeat_worker.is_alive())
                             ):
                                 self.thesis_prompter.reset_announcement()
                                 self._announce_thesis()
@@ -1362,13 +1543,14 @@ class LiveVoiceVerifier:
                         else:
                             self._enqueue_segment("other", wav, dist)
 
-                    # периодический повтор тезиса
+                    # периодический повтор тезиса (если нет фонового повторителя)
                     try:
                         if (
                             self.thesis_prompter is not None
                             and self.thesis_prompter.has_pending()
                             and (time.time() - self._last_announce_ts) >= self._thesis_repeat_sec
                             and time.time() >= self._suppress_until
+                            and not (self._thesis_repeat_worker and self._thesis_repeat_worker.is_alive())
                         ):
                             self.thesis_prompter.reset_announcement()
                             self._announce_thesis()
@@ -1467,8 +1649,7 @@ class LiveVoiceVerifier:
                 logger.info("Все тезисы пройдены")
                 self._thesis_done_notified = True
             return
-        if not self.thesis_prompter.need_announce():
-            return
+        # Убрана проверка need_announce() чтобы разрешить повтор тезисов
         text = self.thesis_prompter.current_text()
         if not text:
             return

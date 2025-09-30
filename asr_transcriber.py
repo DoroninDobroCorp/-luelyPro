@@ -10,6 +10,9 @@ import re
 import ctypes
 from pathlib import Path
 
+from config import ASRConfig as ConfigASRConfig
+from exceptions import ASRError
+
 
 def _preload_nvidia_cuda_libs() -> None:
     """Предзагружаем cuDNN/cuBLAS из pip-пакетов nvidia-* внутри venv.

@@ -30,16 +30,17 @@ dependencies = [
 [tool.setuptools]
 py-modules = [
   "asr_transcriber",
+  "config",
+  "exceptions",
   "live_recognizer",
   "llm_answer",
-  "llm_answer_old",
+  "main",
   "semantic_matcher",
   "thesis_generator",
   "thesis_judge",
   "thesis_prompter",
   "tts_silero",
   "vad_silero",
-  "main",
   "ws_server",
 ]
 

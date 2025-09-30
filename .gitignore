@@ -8,19 +8,44 @@ wheels/
 
 # Virtual environments
 .venv/
+venv/
+env/
 
 # OS junk
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
 
 # Voice profiles
 profiles/*.npz
 *.npz
 
-# Env files
-#.env
-#.env.local
+# Env files (ВАЖНО!)
+.env
+.env.local
+.env.*.local
+
+# Logs
+logs/
+*.log
 
 # Locks / caches
 uv.lock
 .huggingface/
 .cache/
+.pytest_cache/
+
+# Temporary files
+tmp*
+*_backup*
+*_old*
+*_temp*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
