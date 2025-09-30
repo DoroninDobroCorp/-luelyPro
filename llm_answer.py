@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Optional, List
 import re
 import os
@@ -8,27 +7,12 @@ import os
 from loguru import logger
 from google import genai
 from google.genai import types
-
 from dotenv import load_dotenv
 
+from config import LLMConfig as ConfigLLMConfig
+from exceptions import LLMError
+
 load_dotenv()
-
-
-@dataclass
-class LLMConfig:
-    # Быстрая облачная модель по умолчанию
-    model_id: str = "gemini-2.5-flash-lite"
-    max_new_tokens: int = 320
-    temperature: float = 0.3
-    top_p: float = 0.9
-    system_prompt: str = (
-        "Ты — ассистент на экзамене/собеседовании. По входному тексту формируй краткие, фактологичные"
-        " подсказки. Если во входе нет явного вопроса к кандидату — верни пустой ответ. Пиши по-русски,"
-        " коротко и по делу (1–3 предложения), без воды и без ответов от первого лица. Строго не повторяй"
-        " формулировку вопроса и не начинай ответ с пересказа вопроса — сразу давай ответ, затем при"
-        " необходимости одно короткое пояснение. Никакой латиницы: англоязычные названия — русской"
-        " транслитерацией; числа — прописью."
-    )
 
 
 class LLMResponder:
@@ -42,20 +26,16 @@ class LLMResponder:
         self,
         model_id: Optional[str] = None,
         api_key: Optional[str] = None,
-        max_new_tokens: Optional[int] = None,
-        temperature: Optional[float] = None,
-        top_p: Optional[float] = None,
-        system_prompt: Optional[str] = None,
+        config: Optional[ConfigLLMConfig] = None,
         enable_history: bool = True,
         history_max_turns: int = 8,
     ) -> None:
-        cfg = LLMConfig()
+        # Используем config из config.py
+        cfg = config or ConfigLLMConfig()
         self.model_id = model_id or cfg.model_id
-        self.max_new_tokens = max_new_tokens or cfg.max_new_tokens
-        self.temperature = temperature if temperature is not None else cfg.temperature
-        self.top_p = top_p if top_p is not None else cfg.top_p
-        self.system_prompt = system_prompt or cfg.system_prompt
-        # Диалоговая история (последние N обменов): [("user"|"model"), text]
+        self.max_new_tokens = cfg.max_tokens
+        self.temperature = cfg.temperature
+        self.top_p = cfg.top_p
         self.enable_history = bool(enable_history)
         self.history_max_turns = int(history_max_turns)
         self.history: List[tuple[str, str]] = []
@@ -63,13 +43,16 @@ class LLMResponder:
         # Ключ берём из параметра или окружения
         key = api_key or os.getenv("GEMINI_API_KEY")
         if not key:
-            raise RuntimeError(
-                "GEMINI_API_KEY не найден. Установите переменную окружения или передайте api_key в LLMResponder."
+            raise LLMError(
+                "GEMINI_API_KEY не найден. Установите переменную окружения или передайте api_key."
             )
 
         # Инициализация клиента
-        self.client = genai.Client(api_key=key)
-        logger.info(f"LLM (Gemini) инициализирован: model={self.model_id}")
+        try:
+            self.client = genai.Client(api_key=key)
+            logger.info(f"LLM (Gemini) инициализирован: model={self.model_id}")
+        except Exception as e:
+            raise LLMError(f"Не удалось инициализировать Gemini client: {e}") from e
 
     def _build_contents(self, user_text: str) -> List[types.Content]:
         contents: List[types.Content] = []
@@ -93,7 +76,7 @@ class LLMResponder:
         temperature: Optional[float] = None,
     ) -> types.GenerateContentConfig:
         # Минимизируем задержку, отключая "thinking"
-        sys_instr = self.system_prompt + (" " + extra_instruction if extra_instruction else "")
+        sys_instr = self._SYSTEM_PROMPT + (" " + extra_instruction if extra_instruction else "")
         return types.GenerateContentConfig(
             system_instruction=sys_instr,
             max_output_tokens=int(max_tokens if max_tokens is not None else self.max_new_tokens),
@@ -126,6 +109,27 @@ class LLMResponder:
                 return "normal"
         return "normal"
 
+    # Системный промпт для Gemini
+    _SYSTEM_PROMPT = (
+        "Ты — ассистент на экзамене. Отвечай СТРОГО по формату:\n"
+        "1) Сначала ТОЛЬКО факт (дата/имя/число/место) - одно короткое предложение\n"
+        "2) Затем краткое пояснение (если нужно) - одно предложение\n\n"
+        "ПРАВИЛА:\n"
+        "- НЕ повторяй вопрос в ответе\n"
+        "- НЕ используй вводные слова типа 'Первый компьютер', 'Столица находится'\n"
+        "- Начинай СРАЗУ с факта: года, имени, места\n"
+        "- Все числа ПРОПИСЬЮ (не цифрами)\n"
+        "- Никакой латиницы - только русская транслитерация\n"
+        "- Не говори от первого лица\n\n"
+        "ПРИМЕРЫ:\n"
+        "Q: Когда изобрели компьютер?\n"
+        "A: В тысяча девятьсот сорок шестом году. ЭНИАК разработали для военных расчётов.\n\n"
+        "Q: В каком веке основали Москву?\n"
+        "A: В двенадцатом веке. Город основал князь Юрий Долгорукий.\n\n"
+        "Q: Где столица Испании?\n"
+        "A: В Мадриде. Это крупнейший город страны."
+    )
+    
     @staticmethod
     def _extra_instruction_for(intent: str) -> tuple[str, int]:
         if intent == "short":
@@ -250,9 +254,9 @@ class LLMResponder:
                     if len(self.history) > self.history_max_turns * 2:
                         self.history = self.history[-(self.history_max_turns * 2) :]
             return text
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.exception(f"LLM (Gemini) ошибка генерации: {e}")
-            raise
+            raise LLMError(f"Ошибка генерации ответа: {e}") from e
 
 
-__all__ = ["LLMResponder", "LLMConfig"]
+__all__ = ["LLMResponder"]
