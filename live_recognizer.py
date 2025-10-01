@@ -308,6 +308,7 @@ class LiveVoiceVerifier:
         # TTS для озвучки ответа LLM
         self._tts: Optional[SileroTTS] = None
         self._suppress_until: float = 0.0  # подавляем обработку входа на время TTS
+        self._is_announcing: bool = False  # флаг что сейчас озвучивается тезис
         # Внешний получатель аудио (например, WebSocket-клиент). При наличии —
         # TTS будет отправляться туда, а не проигрываться локально через sounddevice
         self._audio_sink: Optional[Callable[[bytes, int], None]] = None
@@ -360,6 +361,8 @@ class LiveVoiceVerifier:
         self._ai_only_thesis: bool = os.getenv("AI_ONLY_THESIS", "1").strip() not in ("0", "false", "False")
         # Новый режим комментариев: генерировать короткие факт-заметки даже без явных вопросов
         self._commentary_mode: bool = os.getenv("COMMENTARY_MODE", "0").strip() not in ("0", "false", "False", "no", "No")
+        # Используем наушники (True = микрофон не слышит TTS, блокировка не нужна)
+        self._use_headphones: bool = os.getenv("USE_HEADPHONES", "1").strip() not in ("0", "false", "False")
         if theses_path:
             theses_list = self._load_theses(Path(theses_path))
             if theses_list:
@@ -532,19 +535,29 @@ class LiveVoiceVerifier:
 
     def _thesis_repeater_loop(self) -> None:
         # Периодическая проверка необходимости повторить тезис, даже в тишине
+        logger.debug(f"🔁 Фоновый поток thesis_repeater запущен (интервал={self._thesis_repeat_sec}с)")
         while not self._thesis_repeat_stop.is_set():
             try:
                 time_since_last = time.time() - self._last_announce_ts
                 has_pending = self.thesis_prompter is not None and self.thesis_prompter.has_pending()
                 not_suppressed = time.time() >= self._suppress_until
+                not_announcing = not self._is_announcing
                 
-                if has_pending and time_since_last >= self._thesis_repeat_sec and not_suppressed:
-                    logger.debug(f"Повтор тезиса через {time_since_last:.1f}с (интервал={self._thesis_repeat_sec}с)")
+                # Детальное логирование для отладки
+                if has_pending:
+                    logger.debug(
+                        f"🔍 Проверка повтора: time_since_last={time_since_last:.1f}с, "
+                        f"threshold={self._thesis_repeat_sec}с, suppressed={not not_suppressed}, announcing={not not_announcing}"
+                    )
+                
+                if has_pending and time_since_last >= self._thesis_repeat_sec and not_suppressed and not_announcing:
+                    logger.debug(f"✅ Повтор тезиса через {time_since_last:.1f}с (интервал={self._thesis_repeat_sec}с)")
                     self._announce_next_thesis_in_cycle()
             except Exception as e:
-                logger.debug(f"Ошибка в thesis_repeater: {e}")
+                logger.exception(f"❌ Ошибка в thesis_repeater: {e}")
             # Частота опроса небольшая, чтобы не грузить CPU
             time.sleep(0.2)
+        logger.debug("🛑 Фоновый поток thesis_repeater остановлен")
 
     def _announce_next_thesis_in_cycle(self) -> None:
         tp = self.thesis_prompter
@@ -600,6 +613,18 @@ class LiveVoiceVerifier:
                 segment = self._segment_queue.get(timeout=0.2)
             except queue.Empty:
                 continue
+            
+            # ВАЖНО: Во время озвучки тезиса игнорируем только СВОИ сегменты
+            # (чтобы не закрыть тезис который сейчас озвучивается)
+            # Но продолжаем слушать ЧУЖИЕ сегменты (новые вопросы)
+            if self._is_announcing:
+                if segment.kind == "self":
+                    logger.debug("⏸️ Игнорируем свой голос во время озвучки тезиса")
+                    self._segment_queue.task_done()
+                    continue
+                else:
+                    logger.debug(f"✅ Обрабатываем чужой сегмент даже во время озвучки")
+            
             try:
                 if segment.kind == "self":
                     self._handle_self_segment(segment)
@@ -638,8 +663,11 @@ class LiveVoiceVerifier:
         if not t:
             logger.info("незнакомый голос (ASR: пусто)")
             return
-        if (time.time() - self._suppress_until) < 0.4:
-            logger.debug(f"Игнорирую распознанный TTS-хвост: {t}")
+        # Проверяем не слишком ли рано после TTS (может быть эхо)
+        # Но ТОЛЬКО если НЕ используем наушники (в наушниках микрофон не слышит TTS)
+        if not self._use_headphones and time.time() < self._suppress_until:
+            time_left = self._suppress_until - time.time()
+            logger.debug(f"Игнорирую вход (suppress ещё {time_left:.1f}с): {t}")
             return
         logger.info(f"незнакомый голос (ASR): {t}")
         # Быстрый хэндлер простых математических запросов
@@ -680,6 +708,8 @@ class LiveVoiceVerifier:
                 self._announce_thesis()
                 return
         # Если включён LLM — генерируем краткий ответ сразу
+        # И ИСПОЛЬЗУЕМ ОТВЕТ КАК ТЕЗИС!
+        llm_answer = None
         if self.llm_enable and self._llm is not None:
             try:
                 prompt = t
@@ -704,9 +734,57 @@ class LiveVoiceVerifier:
                             pass
                     logger.info(f"Ответ: {ans}")
                     self._speak_text(ans)
-                    return
+                    llm_answer = ans  # Сохраняем для использования как тезис
             except Exception as e:  # noqa: BLE001
                 logger.exception(f"LLM ошибка при генерации ответа: {e}")
+        
+        # Если есть ответ от LLM - используем его как тезис (если это НЕ отказ)
+        if llm_answer:
+            # Фильтруем "плохие" ответы - не создаём тезис из них
+            bad_patterns = [
+                "не ясен",
+                "не понял",
+                "не понятен", 
+                "перефразируйте",
+                "уточните",
+                "не могу ответить",
+                "недостаточно информации",
+            ]
+            is_bad_answer = any(pattern.lower() in llm_answer.lower() for pattern in bad_patterns)
+            
+            if is_bad_answer:
+                logger.warning(f"⚠️ Ответ LLM не подходит для тезиса (отказ): {llm_answer[:50]}...")
+                # Не создаём тезис, продолжаем обычную обработку
+            else:
+                # УМНАЯ ЗАМЕНА: проверяем нужно ли заменить набор тезисов
+                should_replace = self._should_replace_thesis_set(new_question=t, new_thesis=llm_answer)
+                
+                if should_replace or self.thesis_prompter is None:
+                    # Создаём НОВЫЙ набор тезисов (смена темы)
+                    self.thesis_prompter = ThesisPrompter(
+                        theses=[llm_answer],
+                        match_threshold=self._thesis_match_threshold,
+                        enable_semantic=False,
+                        semantic_threshold=self._thesis_semantic_threshold,
+                        semantic_model_id=self._thesis_semantic_model,
+                        enable_gemini=False,
+                        gemini_min_conf=self._thesis_gemini_min_conf,
+                    )
+                    self._thesis_done_notified = False
+                    logger.info(f"🔄 НОВЫЙ набор тезисов (смена темы): {llm_answer}")
+                else:
+                    # ДОБАВЛЯЕМ к существующим (продолжение темы)
+                    current_theses = getattr(self.thesis_prompter, "theses", [])
+                    current_theses.append(llm_answer)
+                    # Ограничиваем до 5 тезисов максимум
+                    if len(current_theses) > 5:
+                        current_theses = current_theses[-5:]
+                        logger.debug("Ограничили набор до 5 последних тезисов")
+                    self.thesis_prompter.theses = current_theses
+                    logger.info(f"➕ ДОБАВЛЕН тезис к набору (всего: {len(current_theses)}): {llm_answer}")
+                
+                self._announce_thesis()
+                return
         # Быстрая обработка тезисов через AI
         if self._ai_only_thesis:
             theses = self._extract_theses_ai(t)
@@ -790,6 +868,78 @@ class LiveVoiceVerifier:
             except Exception:
                 return f"Число очень большое. {base_part} в степени {exp_part}."
         return f"{res_s} будет {base_part} в степени {exp_part}."
+
+    def _should_replace_thesis_set(self, new_question: str, new_thesis: str) -> bool:
+        """
+        Проверяет через Gemini: нужно ли заменить набор тезисов на новый,
+        или новый тезис относится к той же теме (продолжение разговора).
+        
+        Returns:
+            True - смена темы, заменить набор
+            False - продолжение темы, добавить к существующим
+        """
+        if self.thesis_prompter is None or not hasattr(self.thesis_prompter, "theses"):
+            return True  # Нет старых тезисов - создаём новый набор
+        
+        old_theses = getattr(self.thesis_prompter, "theses", [])
+        if not old_theses:
+            return True  # Нет старых тезисов - создаём новый набор
+        
+        try:
+            import json
+            from google import genai  # type: ignore
+            from google.genai import types  # type: ignore
+            key = os.getenv("GEMINI_API_KEY")
+            if not key:
+                return True  # Нет ключа - по умолчанию заменяем
+            
+            client = genai.Client(api_key=key)
+            
+            # Промпт для Gemini
+            old_theses_text = "\n".join([f"- {t}" for t in old_theses])
+            prompt = f"""Анализ актуальности тезисов:
+
+ТЕКУЩИЕ ТЕЗИСЫ:
+{old_theses_text}
+
+НОВЫЙ ВОПРОС:
+{new_question}
+
+НОВЫЙ ТЕЗИС:
+{new_thesis}
+
+Определи: новый вопрос связан с текущими тезисами (продолжение темы) или это смена темы?
+
+Ответь JSON:
+{{"decision": "continue"}}  - если продолжение темы (добавить тезис)
+{{"decision": "replace"}}   - если смена темы (заменить набор)
+"""
+            
+            cfg = types.GenerateContentConfig(
+                system_instruction="Ты - анализатор контекста. Определяй смену темы разговора.",
+                max_output_tokens=50,
+                temperature=0.1,
+                response_mime_type="application/json",
+                thinking_config=types.ThinkingConfig(thinking_budget=0),
+            )
+            
+            resp = client.models.generate_content(
+                model="gemini-2.5-flash-lite",
+                contents=[types.Content(role="user", parts=[types.Part.from_text(text=prompt)])],
+                config=cfg,
+            )
+            
+            result = json.loads(resp.text)
+            decision = result.get("decision", "replace")
+            
+            should_replace = (decision == "replace")
+            logger.debug(f"🤖 Gemini решение: {decision} ({'ЗАМЕНИТЬ' if should_replace else 'ДОБАВИТЬ'})")
+            return should_replace
+            
+        except Exception as e:
+            logger.debug(f"Ошибка проверки актуальности тезисов: {e}")
+            # При ошибке по умолчанию заменяем (безопасное поведение)
+            return True
 
     def _extract_commentary_facts(self, text: str) -> List[str]:
         """Возвращает список коротких факт-заметок по теме реплики собеседника.
@@ -1415,7 +1565,13 @@ class LiveVoiceVerifier:
                 if audio.size <= 0:
                     continue
                 duration = float(audio.shape[0]) / float(self._tts.sample_rate)
-                self._suppress_until = time.time() + duration + 0.05
+                # Устанавливаем suppress ТОЛЬКО если НЕ используем наушники
+                # (в наушниках микрофон не слышит TTS, блокировка не нужна)
+                if not self._use_headphones:
+                    self._suppress_until = time.time() + duration + 2.5
+                    logger.debug(f"Блокировка на {duration + 2.5:.1f}с (динамики)")
+                else:
+                    logger.debug(f"Наушники - блокировка не нужна")
                 if self._audio_sink is not None:
                     import io, wave
                     pcm16 = (np.clip(audio, -1.0, 1.0) * 32767.0).astype(np.int16)
@@ -1434,6 +1590,8 @@ class LiveVoiceVerifier:
                     if sd is None:
                         continue
                     sd.stop()
+                    # ВАЖНО: self._is_speaking уже блокирует обработку на время TTS
+                    # Это предотвращает зацикливание (TTS слышит сам себя)
                     sd.play(audio, samplerate=self._tts.sample_rate)
                     time.sleep(min(0.3, duration * 0.3))
         except Exception as e:  # noqa: BLE001
@@ -1653,12 +1811,19 @@ class LiveVoiceVerifier:
         text = self.thesis_prompter.current_text()
         if not text:
             return
-        logger.info(f"Тезис: {text}")
-        # Озвучиваем только сам тезис, без дополнительной информации
-        self._speak_text(text)
-        self.thesis_prompter.mark_announced()
-        # Убираем озвучивание оставшихся тезисов - это избыточно
-        self._last_announce_ts = time.time()
+        
+        # Устанавливаем флаг что объявляем тезис
+        self._is_announcing = True
+        try:
+            logger.info(f"Тезис: {text}")
+            # Озвучиваем только сам тезис, без дополнительной информации
+            self._speak_text(text)
+            self.thesis_prompter.mark_announced()
+            # Убираем озвучивание оставшихся тезисов - это избыточно
+            self._last_announce_ts = time.time()
+        finally:
+            # Сбрасываем флаг после озвучки
+            self._is_announcing = False
 
     def _process_self_segment(self, wav: np.ndarray) -> None:
         if not self.asr_enable:
