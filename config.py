@@ -75,7 +75,7 @@ class AudioConfig:
 @dataclass
 class LLMConfig:
     """Настройки Language Model."""
-    model_id: str = "gemini-2.0-flash-exp"  # Быстрая модель
+    model_id: str = "gemini-2.5-flash"  # Быстрая модель GA (лучше 2.0)
     max_tokens: int = 320
     temperature: float = 0.3
     top_p: float = 0.9
@@ -113,6 +113,7 @@ class SystemConfig:
     question_filter_mode: str = "gemini"  # "heuristic" | "gemini"
     question_min_len: int = 8  # Минимальная длина текста для обработки как вопроса
     append_question_to_answer: bool = False  # Добавлять вопрос к ответу LLM
+    use_headphones: bool = True  # True = in-ear наушники (микрофон не слышит TTS)
     
     @classmethod
     def from_env(cls) -> "SystemConfig":
@@ -127,6 +128,7 @@ class SystemConfig:
             question_filter_mode=os.getenv("QUESTION_FILTER_MODE", "gemini").strip().lower(),
             question_min_len=int(os.getenv("QUESTION_MIN_LEN", "8")),
             append_question_to_answer=os.getenv("APPEND_QUESTION_TO_ANSWER", "0").strip().lower() in ("1", "true", "yes", "on"),
+            use_headphones=os.getenv("USE_HEADPHONES", "1").strip() not in ("0", "false", "False"),
         )
 
 
