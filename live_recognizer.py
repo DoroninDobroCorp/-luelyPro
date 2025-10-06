@@ -327,7 +327,8 @@ class LiveVoiceVerifier:
         self._thesis_generator: Optional[GeminiThesisGenerator] = None
         self._theses_history: set[str] = set()
         self._question_context: str = ""
-        self._max_question_context_chars: int = 2000
+        self._max_question_context_chars: int = 800  # Уменьшено с 2000 для быстроты
+        self._max_theses_history: int = 50  # Лимит для очистки старых тезисов
         self._last_announce_ts: float = 0.0
         self._segment_queue: "queue.Queue[QueuedSegment]" = queue.Queue(maxsize=4)
         self._segment_worker: Optional[threading.Thread] = None
@@ -337,6 +338,9 @@ class LiveVoiceVerifier:
         self._thesis_repeat_stop = threading.Event()
         # Индекс для циклического объявления оставшихся тезисов
         self._thesis_cycle_idx: int = 0
+        # Счетчики повторов для каждого тезиса (макс 4 раза)
+        self._thesis_repeat_counts: dict[str, int] = {}
+        self._max_thesis_repeats: int = 4
         # Как часто повторять текущий тезис (секунды), если он ещё не закрыт
         try:
             # Интервал повтора текущего тезиса (сек)
@@ -379,7 +383,8 @@ class LiveVoiceVerifier:
 
         if self.llm_enable and LLMResponder is not None:
             try:
-                self._llm = LLMResponder()
+                # Уменьшаем историю LLM с 8 до 4 пар для снижения нагрузки
+                self._llm = LLMResponder(history_max_turns=4)
             except Exception as e:  # noqa: BLE001
                 logger.exception(f"Не удалось инициализировать LLMResponder: {e}")
 
@@ -545,6 +550,20 @@ class LiveVoiceVerifier:
         total = len(getattr(tp, "theses", []))
         if self._thesis_cycle_idx < start_idx or self._thesis_cycle_idx >= total:
             self._thesis_cycle_idx = start_idx
+        
+        # Проверяем счетчик повторов для текущего тезиса
+        theses = getattr(tp, "theses", [])
+        if self._thesis_cycle_idx < len(theses):
+            thesis_text = theses[self._thesis_cycle_idx]
+            repeat_count = self._thesis_repeat_counts.get(thesis_text, 0)
+            
+            if repeat_count >= self._max_thesis_repeats:
+                logger.debug(f"⏭️ Тезис '{thesis_text[:40]}...' уже озвучен {repeat_count} раз (макс {self._max_thesis_repeats}), пропускаем")
+                # Переходим к следующему тезису в цикле
+                self._thesis_cycle_idx += 1
+                if self._thesis_cycle_idx >= total:
+                    self._thesis_cycle_idx = start_idx
+                return
         
         # Озвучиваем тезис по циклическому индексу БЕЗ смены _index
         # Это позволяет озвучивать все накопленные тезисы, но не сбивать текущий
@@ -748,6 +767,8 @@ class LiveVoiceVerifier:
                 
                 if should_replace or self.thesis_prompter is None:
                     # Создаём НОВЫЙ набор тезисов (смена темы)
+                    # ВАЖНО: Сбрасываем счетчики повторов при смене темы
+                    self._thesis_repeat_counts.clear()
                     self.thesis_prompter = ThesisPrompter(
                         theses=[llm_answer],
                         match_threshold=self._thesis_match_threshold,
@@ -771,6 +792,10 @@ class LiveVoiceVerifier:
                         current_theses = current_theses[-5:]
                         logger.debug("Ограничили набор до 5 последних тезисов")
                     self.thesis_prompter.theses = current_theses
+                    # При добавлении тезиса ЗАНОВО (даже если был раньше) - счетчик с нуля
+                    if llm_answer in self._thesis_repeat_counts:
+                        logger.debug(f"♻️ Тезис добавлен повторно (сброс счетчика): {llm_answer[:50]}...")
+                        self._thesis_repeat_counts[llm_answer] = 0
                     logger.info(f"➕ ДОБАВЛЕН тезис к набору (всего: {len(current_theses)}): {llm_answer}")
                 
                 self._announce_thesis()
@@ -1726,6 +1751,11 @@ class LiveVoiceVerifier:
         # Ограничим окно контекста, чтобы держать только последние N символов
         if len(self._question_context) > self._max_question_context_chars:
             self._question_context = self._question_context[-self._max_question_context_chars :]
+        # Очистка истории тезисов при переполнении (предотвращаем утечку памяти)
+        if len(self._theses_history) > self._max_theses_history:
+            # Сохраняем только последние N тезисов
+            recent = list(self._theses_history)[-self._max_theses_history:]
+            self._theses_history = set(recent)
 
     def _maybe_generate_theses(self) -> None:
         if not self._thesis_autogen_enable or self._thesis_generator is None:
@@ -1793,9 +1823,9 @@ class LiveVoiceVerifier:
 
     def _announce_thesis(self, thesis_index: Optional[int] = None) -> None:
         """
-        Озвучивает тезис.
+        Озвучивает тезис В ОБРАТНОМ ПОРЯДКЕ (последний → первый).
         thesis_index: если указан, озвучивает конкретный тезис БЕЗ смены _index.
-                      если None, озвучивает текущий тезис (по _index).
+                      если None, озвучивает текущий тезис (по _index) в ОБРАТНОМ порядке.
         """
         if self.thesis_prompter is None:
             return
@@ -1810,24 +1840,40 @@ class LiveVoiceVerifier:
             logger.debug(f"Откладываем объявление тезиса - suppress активен ещё {self._suppress_until - time.time():.1f}с")
             return
         
-        # Получаем текст тезиса
+        # Получаем текст тезиса В ОБРАТНОМ ПОРЯДКЕ
+        theses = getattr(self.thesis_prompter, "theses", [])
+        if not theses:
+            return
+        
         if thesis_index is not None:
             # Озвучиваем конкретный тезис по индексу БЕЗ смены _index
-            theses = getattr(self.thesis_prompter, "theses", [])
             if thesis_index < 0 or thesis_index >= len(theses):
                 return
-            text = theses[thesis_index]
+            # ОБРАТНЫЙ порядок: последний становится первым
+            reversed_index = len(theses) - 1 - thesis_index
+            text = theses[reversed_index]
         else:
-            # Озвучиваем текущий тезис
-            text = self.thesis_prompter.current_text()
+            # Озвучиваем текущий тезис В ОБРАТНОМ ПОРЯДКЕ
+            current_idx = getattr(self.thesis_prompter, "_index", 0)
+            reversed_index = len(theses) - 1 - current_idx
+            if reversed_index < 0 or reversed_index >= len(theses):
+                return
+            text = theses[reversed_index]
         
         if not text:
             return
         
+        # Увеличиваем счетчик повторов для этого тезиса
+        if text not in self._thesis_repeat_counts:
+            self._thesis_repeat_counts[text] = 0
+        self._thesis_repeat_counts[text] += 1
+        
+        repeat_num = self._thesis_repeat_counts[text]
+        logger.info(f"📢 Тезис (повтор {repeat_num}/{self._max_thesis_repeats}): {text[:80]}...")
+        
         # Устанавливаем флаг что объявляем тезис
         self._is_announcing = True
         try:
-            logger.info(f"Тезис: {text}")
             # Озвучиваем только сам тезис, без дополнительной информации
             self._speak_text(text)
             if thesis_index is None:
