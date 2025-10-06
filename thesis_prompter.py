@@ -91,6 +91,7 @@ class ThesisPrompter:
         self._current_tokens: Set[str] = set()
         self._thesis_tokens: List[Set[str]] = [self._extract_tokens(t) for t in self.theses]
         self._current_text: str = ""
+        self._dialogue_context: List[tuple[str, str]] = []  # (role, text) - роль: "экзаменатор" или "студент"
         # Семантика (фоллбэк)
         self._semantic_enabled = bool(self.enable_semantic) and (SemanticMatcher is not None)
         self._semantic_matcher: Optional[SemanticMatcher] = None
@@ -129,49 +130,39 @@ class ThesisPrompter:
         if self.has_pending():
             self._announced = False
 
-    def consume_transcript(self, transcript: str) -> bool:
+    def consume_transcript(self, transcript: str, role: str = "студент") -> bool:
+        """
+        Обрабатываем реплику диалога.
+        role: "студент" (мой ответ) или "экзаменатор" (вопрос)
+        """
         if not transcript:
             return False
-        tokens = self._extract_tokens(transcript)
-        if not tokens and not transcript.strip():
+        text = transcript.strip()
+        if not text:
             return False
-        self._current_tokens.update(tokens)
-        if transcript.strip():
-            if self._current_text:
-                self._current_text += " "
-            self._current_text += transcript.strip()
+        
+        # Добавляем в контекст диалога
+        self._dialogue_context.append((role, text))
+        
+        # Обновляем накопленный текст (для старых методов)
+        if self._current_text:
+            self._current_text += " "
+        self._current_text += text
+        
         if not self.has_pending():
             return False
-        thesis_tokens = self._thesis_tokens[self._index]
-        if not thesis_tokens:
-            # пустой тезис — сразу считаем пройденным
-            self._advance()
-            return True
-        coverage = self._coverage(self._current_tokens, thesis_tokens)
-        logger.debug(f"coverage={coverage:.2f} for current thesis {self._index+1}/{len(self.theses)}")
-        if coverage >= self.match_threshold:
-            self._advance()
-            return True
-        # Основной судья: Gemini
-        if self._gemini_enabled and self._gemini_judge is not None and self._current_text:
+        
+        # Проверяем только через Gemini (убрали проценты)
+        if self._gemini_enabled and self._gemini_judge is not None:
             thesis_text = self.theses[self._index]
-            covered, conf = self._gemini_judge.judge(thesis_text, self._current_text)
+            covered, conf = self._gemini_judge.judge(thesis_text, self._dialogue_context)
             logger.debug(
                 f"GeminiJudge для тезиса '{thesis_text[:40]}...': covered={covered}, conf={conf:.3f}"
             )
             if covered and conf >= self.gemini_min_conf:
                 self._advance()
                 return True
-        # Семантика (фоллбэк)
-        if self._semantic_enabled and self._semantic_matcher is not None:
-            thesis_text = self.theses[self._index]
-            score = self._semantic_matcher.score(thesis_text, self._current_text)  # type: ignore
-            logger.debug(
-                f"semantic match для тезиса '{thesis_text[:40]}...': score={score:.3f}"
-            )
-            if score >= self.semantic_threshold:
-                self._advance()
-                return True
+        
         return False
 
     def _advance(self) -> None:
@@ -179,6 +170,7 @@ class ThesisPrompter:
         self._announced = False
         self._current_tokens.clear()
         self._current_text = ""
+        self._dialogue_context.clear()
 
     # пустая строка перед следующим методом
     def _extract_tokens(self, text: str) -> Set[str]:

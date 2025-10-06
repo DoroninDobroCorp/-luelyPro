@@ -239,18 +239,15 @@ class LiveVoiceVerifier:
         asr_compute_type: Optional[str] = None,
         # LLM настройки
         llm_enable: bool = False,
-        # Тезисы
-        theses_path: Optional[Path | str] = Path("theses.txt"),
+        # Thesis настройки (используем дефолты из ThesisConfig)
         thesis_match_threshold: float = 0.6,
+        thesis_semantic_enable: bool = True,
         thesis_semantic_threshold: float = 0.55,
         thesis_semantic_model: Optional[str] = None,
-        thesis_semantic_enable: bool = True,
-        # Gemini judge
         thesis_gemini_enable: bool = True,
         thesis_gemini_min_conf: float = 0.60,
-        # Автогенерация тезисов на основе чужой речи
         thesis_autogen_enable: bool = True,
-        thesis_autogen_batch: int = 4,
+        thesis_autogen_batch: int = 3,
     ) -> None:
         if device is None:
             # Без torch считаем, что доступен только CPU
@@ -316,6 +313,7 @@ class LiveVoiceVerifier:
         # Тезисный помощник
         self.thesis_prompter: Optional[ThesisPrompter] = None
         self._thesis_done_notified = False
+        self._last_question: str = ""  # последний вопрос экзаменатора для контекста
         # Конфигурация для переинициализации помощника
         self._thesis_match_threshold = float(thesis_match_threshold)
         self._thesis_semantic_enable = bool(thesis_semantic_enable)
@@ -363,36 +361,15 @@ class LiveVoiceVerifier:
         self._commentary_mode: bool = os.getenv("COMMENTARY_MODE", "0").strip() not in ("0", "false", "False", "no", "No")
         # Используем наушники (True = микрофон не слышит TTS, блокировка не нужна)
         self._use_headphones: bool = os.getenv("USE_HEADPHONES", "1").strip() not in ("0", "false", "False")
-        if theses_path:
-            theses_list = self._load_theses(Path(theses_path))
-            if theses_list:
-                self.thesis_prompter = ThesisPrompter(
-                    theses=theses_list,
-                    match_threshold=self._thesis_match_threshold,
-                    enable_semantic=self._thesis_semantic_enable,
-                    semantic_threshold=self._thesis_semantic_threshold,
-                    semantic_model_id=self._thesis_semantic_model,
-                    enable_gemini=self._thesis_gemini_enable,
-                    gemini_min_conf=self._thesis_gemini_min_conf,
-                )
-                logger.info(
-                    f"Тезисный помощник активирован: {len(theses_list)} пунктов"
-                )
-            else:
-                logger.info(
-                    f"Статические тезисы не найдены (файл {theses_path} отсутствует или пуст) — будет использоваться автогенерация"
-                )
-        # Инициализация генератора тезисов
-        if self._thesis_autogen_enable and GeminiThesisGenerator is not None:
+        # Инициализация генератора тезисов (всегда включен)
+        if GeminiThesisGenerator is not None:
             try:
                 self._thesis_generator = GeminiThesisGenerator()  # type: ignore
                 logger.info("Автогенерация тезисов Gemini включена")
             except Exception as e:  # noqa: BLE001
                 logger.exception(f"Не удалось инициализировать ThesisGenerator: {e}")
-                self._thesis_autogen_enable = False
-        elif self._thesis_autogen_enable and GeminiThesisGenerator is None:
-            logger.warning("Автогенерация тезисов отключена: нет зависимости thesis_generator/google-genai")
-            self._thesis_autogen_enable = False
+        else:
+            logger.warning("Генератор тезисов недоступен: нет зависимости thesis_generator/google-genai")
 
         if self.asr_enable:
             try:
@@ -568,24 +545,22 @@ class LiveVoiceVerifier:
         total = len(getattr(tp, "theses", []))
         if self._thesis_cycle_idx < start_idx or self._thesis_cycle_idx >= total:
             self._thesis_cycle_idx = start_idx
-        # объявляем следующий по циклу как текущий
-        try:
-            setattr(tp, "_index", self._thesis_cycle_idx)
-        except Exception:
-            pass
+        
+        # Озвучиваем тезис по циклическому индексу БЕЗ смены _index
+        # Это позволяет озвучивать все накопленные тезисы, но не сбивать текущий
         tp.reset_announcement()
-        self._announce_thesis()
+        self._announce_thesis(thesis_index=self._thesis_cycle_idx)
+        
         # вычисляем следующий индекс цикла среди оставшихся
-        # если в процессе текущий тезис закрылся, _index сдвинется
-        start_idx2 = getattr(tp, "_index", start_idx)
         total2 = len(getattr(tp, "theses", []))
+        current_idx = getattr(tp, "_index", start_idx)
         if not tp.has_pending():
             self._thesis_cycle_idx = 0
             return
-        # следующий — это max(current_index, previous+1)
-        self._thesis_cycle_idx = max(start_idx2, self._thesis_cycle_idx + 1)
+        # следующий — это следующий незакрытый тезис
+        self._thesis_cycle_idx = self._thesis_cycle_idx + 1
         if self._thesis_cycle_idx >= total2:
-            self._thesis_cycle_idx = start_idx2
+            self._thesis_cycle_idx = current_idx
 
     def _enqueue_segment(self, kind: str, audio: np.ndarray, distance: float = 0.0) -> None:
         if audio.size == 0:
@@ -670,6 +645,9 @@ class LiveVoiceVerifier:
             logger.debug(f"Игнорирую вход (suppress ещё {time_left:.1f}с): {t}")
             return
         logger.info(f"незнакомый голос (ASR): {t}")
+        
+        # Сохраняем последний вопрос для контекста тезисов
+        self._last_question = t
         # Быстрый хэндлер простых математических запросов
         try:
             math_ans = self._answer_math_if_any(t)
@@ -700,7 +678,7 @@ class LiveVoiceVerifier:
                     enable_semantic=False,
                     semantic_threshold=self._thesis_semantic_threshold,
                     semantic_model_id=self._thesis_semantic_model,
-                    enable_gemini=False,
+                    enable_gemini=True,
                     gemini_min_conf=self._thesis_gemini_min_conf,
                 )
                 self._thesis_done_notified = False
@@ -757,7 +735,16 @@ class LiveVoiceVerifier:
                 # Не создаём тезис, продолжаем обычную обработку
             else:
                 # УМНАЯ ЗАМЕНА: проверяем нужно ли заменить набор тезисов
-                should_replace = self._should_replace_thesis_set(new_question=t, new_thesis=llm_answer)
+                # Если есть незакрытые тезисы - ВСЕГДА добавляем (накопление)
+                has_pending = self.thesis_prompter is not None and self.thesis_prompter.has_pending()
+                
+                if has_pending:
+                    # Если есть незакрытые тезисы - добавляем к ним
+                    should_replace = False
+                    logger.debug("Есть незакрытые тезисы - добавляем новый")
+                else:
+                    # Если все тезисы закрыты - проверяем смену темы
+                    should_replace = self._should_replace_thesis_set(new_question=t, new_thesis=llm_answer)
                 
                 if should_replace or self.thesis_prompter is None:
                     # Создаём НОВЫЙ набор тезисов (смена темы)
@@ -767,9 +754,12 @@ class LiveVoiceVerifier:
                         enable_semantic=False,
                         semantic_threshold=self._thesis_semantic_threshold,
                         semantic_model_id=self._thesis_semantic_model,
-                        enable_gemini=False,
+                        enable_gemini=True,
                         gemini_min_conf=self._thesis_gemini_min_conf,
                     )
+                    # Добавляем вопрос экзаменатора в контекст СРАЗУ после создания
+                    if self._last_question:
+                        self.thesis_prompter._dialogue_context.append(("экзаменатор", self._last_question))
                     self._thesis_done_notified = False
                     logger.info(f"🔄 НОВЫЙ набор тезисов (смена темы): {llm_answer}")
                 else:
@@ -794,10 +784,10 @@ class LiveVoiceVerifier:
                 self.thesis_prompter = ThesisPrompter(
                     theses=limited_theses,
                     match_threshold=self._thesis_match_threshold,
-                    enable_semantic=False,  # Отключаем семантику для скорости
+                    enable_semantic=False,
                     semantic_threshold=self._thesis_semantic_threshold,
                     semantic_model_id=self._thesis_semantic_model,
-                    enable_gemini=False,  # Отключаем Gemini для скорости
+                    enable_gemini=True,
                     gemini_min_conf=self._thesis_gemini_min_conf,
                 )
                 self._thesis_done_notified = False
@@ -897,7 +887,7 @@ class LiveVoiceVerifier:
             
             # Промпт для Gemini
             old_theses_text = "\n".join([f"- {t}" for t in old_theses])
-            prompt = f"""Анализ актуальности тезисов:
+            prompt = f"""Анализ связности вопросов:
 
 ТЕКУЩИЕ ТЕЗИСЫ:
 {old_theses_text}
@@ -908,11 +898,13 @@ class LiveVoiceVerifier:
 НОВЫЙ ТЕЗИС:
 {new_thesis}
 
-Определи: новый вопрос связан с текущими тезисами (продолжение темы) или это смена темы?
+Определи: новый вопрос тематически связан с текущими тезисами (например, оба про космонавтов, историю, географию и т.д.) или это совершенно другая тема?
+
+ВАЖНО: Вопросы "Первый человек в космосе" и "Первая женщина в космосе" - это ОДНА тема (космонавтика), поэтому decision="continue".
 
 Ответь JSON:
-{{"decision": "continue"}}  - если продолжение темы (добавить тезис)
-{{"decision": "replace"}}   - если смена темы (заменить набор)
+{{"decision": "continue"}}  - если тематически связаны (добавить тезис к существующим)
+{{"decision": "replace"}}   - если совершенно разные темы (заменить набор)
 """
             
             cfg = types.GenerateContentConfig(
@@ -1073,7 +1065,7 @@ class LiveVoiceVerifier:
         if self.thesis_prompter is None:
             logger.debug("Тезисный помощник не активен — пропускаю самоанализ")
             return
-        if self.thesis_prompter.consume_transcript(t):
+        if self.thesis_prompter.consume_transcript(t, role="студент"):
             logger.info("Тезис закрыт")
             if not self.thesis_prompter.has_pending():
                 self._maybe_generate_theses()
@@ -1590,10 +1582,10 @@ class LiveVoiceVerifier:
                     if sd is None:
                         continue
                     sd.stop()
-                    # ВАЖНО: self._is_speaking уже блокирует обработку на время TTS
-                    # Это предотвращает зацикливание (TTS слышит сам себя)
+                    # ВАЖНО: self._is_announcing блокирует повторные объявления тезисов
+                    # Спим полную длительность аудио чтобы дождаться завершения
                     sd.play(audio, samplerate=self._tts.sample_rate)
-                    time.sleep(min(0.3, duration * 0.3))
+                    time.sleep(duration + 0.1)  # Небольшой запас
         except Exception as e:  # noqa: BLE001
             logger.exception(f"TTS ошибка: {e}")
 
@@ -1772,10 +1764,10 @@ class LiveVoiceVerifier:
         self.thesis_prompter = ThesisPrompter(
             theses=new_items,
             match_threshold=self._thesis_match_threshold,
-            enable_semantic=False,  # Отключаем для скорости
+            enable_semantic=False,
             semantic_threshold=self._thesis_semantic_threshold,
             semantic_model_id=self._thesis_semantic_model,
-            enable_gemini=False,  # Отключаем для скорости  
+            enable_gemini=True,
             gemini_min_conf=self._thesis_gemini_min_conf,
         )
         self._thesis_done_notified = False
@@ -1799,7 +1791,12 @@ class LiveVoiceVerifier:
         if self.thesis_prompter is not None:
             self.thesis_prompter.reset_announcement()
 
-    def _announce_thesis(self) -> None:
+    def _announce_thesis(self, thesis_index: Optional[int] = None) -> None:
+        """
+        Озвучивает тезис.
+        thesis_index: если указан, озвучивает конкретный тезис БЕЗ смены _index.
+                      если None, озвучивает текущий тезис (по _index).
+        """
         if self.thesis_prompter is None:
             return
         if not self.thesis_prompter.has_pending():
@@ -1807,8 +1804,23 @@ class LiveVoiceVerifier:
                 logger.info("Все тезисы пройдены")
                 self._thesis_done_notified = True
             return
-        # Убрана проверка need_announce() чтобы разрешить повтор тезисов
-        text = self.thesis_prompter.current_text()
+        
+        # Ждём пока закончится suppress (TTS ответа LLM), иначе будет перебивать
+        if time.time() < self._suppress_until:
+            logger.debug(f"Откладываем объявление тезиса - suppress активен ещё {self._suppress_until - time.time():.1f}с")
+            return
+        
+        # Получаем текст тезиса
+        if thesis_index is not None:
+            # Озвучиваем конкретный тезис по индексу БЕЗ смены _index
+            theses = getattr(self.thesis_prompter, "theses", [])
+            if thesis_index < 0 or thesis_index >= len(theses):
+                return
+            text = theses[thesis_index]
+        else:
+            # Озвучиваем текущий тезис
+            text = self.thesis_prompter.current_text()
+        
         if not text:
             return
         
@@ -1818,7 +1830,9 @@ class LiveVoiceVerifier:
             logger.info(f"Тезис: {text}")
             # Озвучиваем только сам тезис, без дополнительной информации
             self._speak_text(text)
-            self.thesis_prompter.mark_announced()
+            if thesis_index is None:
+                # Помечаем как объявленный только если это текущий тезис
+                self.thesis_prompter.mark_announced()
             # Убираем озвучивание оставшихся тезисов - это избыточно
             self._last_announce_ts = time.time()
         finally:
@@ -1834,26 +1848,6 @@ class LiveVoiceVerifier:
             logger.exception(f"ASR ошибка при распознавании моего голоса: {e}")
             return
         self._handle_self_transcript(transcript)
-
-    @staticmethod
-    def _load_theses(path: Path) -> List[str]:
-        if not path.exists():
-            return []
-        try:
-            text = path.read_text(encoding="utf-8")
-        except Exception as e:  # noqa: BLE001
-            logger.error(f"Не удалось прочитать файл тезисов {path}: {e}")
-            return []
-        items: List[str] = []
-        for raw in text.splitlines():
-            line = raw.strip()
-            if not line or line.startswith("#"):
-                continue
-            line = line.lstrip("-•*0123456789. )\t")
-            line = line.strip()
-            if line:
-                items.append(line)
-        return items
 
     # ==== Warmup моделей ====
     def _warmup_models(self) -> None:
@@ -2248,18 +2242,6 @@ def live_cli(
     asr_compute: Optional[str] = None,
     # LLM
     llm: bool = False,
-    # Тезисы
-    theses_path: Optional[Path] = None,
-    thesis_match: float = 0.6,
-    thesis_semantic: float = 0.55,
-    thesis_semantic_model: Optional[str] = None,
-    thesis_semantic_disable: bool = False,
-    # Gemini judge
-    thesis_gemini_conf: float = 0.60,
-    thesis_gemini_disable: bool = False,
-    # Автогенерация тезисов
-    thesis_autogen_disable: bool = False,
-    thesis_autogen_batch: int = 4,
     run_seconds: float = 0.0,
 ) -> None:
     setup_logging()
@@ -2277,15 +2259,6 @@ def live_cli(
         asr_device=asr_device,
         asr_compute_type=asr_compute,
         llm_enable=llm,
-        theses_path=theses_path,
-        thesis_match_threshold=thesis_match,
-        thesis_semantic_threshold=thesis_semantic,
-        thesis_semantic_model=thesis_semantic_model,
-        thesis_semantic_enable=not thesis_semantic_disable,
-        thesis_gemini_enable=not thesis_gemini_disable,
-        thesis_gemini_min_conf=thesis_gemini_conf,
-        thesis_autogen_enable=not thesis_autogen_disable,
-        thesis_autogen_batch=thesis_autogen_batch,
     )
     profile = VoiceProfile.load(profile_path)
     if profile is None:

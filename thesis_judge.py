@@ -43,20 +43,44 @@ class GeminiJudge:
         self.client = genai.Client(api_key=key)
         logger.info(f"GeminiJudge инициализирован: model={self.model_id}")
 
-    def judge(self, thesis: str, spoken_text: str) -> Tuple[bool, float]:
-        """Возвращает (covered, confidence[0..1])."""
-        if not thesis or not spoken_text:
+    def judge(self, thesis: str, dialogue_context) -> Tuple[bool, float]:
+        """
+        Возвращает (covered, confidence[0..1]).
+        dialogue_context: либо строка (старый API), либо list[(role, text)]
+        """
+        if not thesis:
+            return (False, 0.0)
+        
+        # Формируем контекст диалога
+        if isinstance(dialogue_context, str):
+            # Старый API - просто текст
+            dialogue_text = dialogue_context.strip()
+        elif isinstance(dialogue_context, list):
+            # Новый API - список (роль, текст)
+            lines = []
+            for role, text in dialogue_context:
+                if role == "студент":
+                    lines.append(f"Студент: {text}")
+                else:
+                    lines.append(f"Экзаменатор: {text}")
+            dialogue_text = "\n".join(lines)
+        else:
+            return (False, 0.0)
+        
+        if not dialogue_text:
             return (False, 0.0)
 
         sys_instr = (
-            "Ты — строгий экзаменатор на собеседовании/экзамене. Оцени, отражает ли речь кандидата"
-            " ключевую идею тезиса. Ответ строго в JSON и только JSON:"
-            " {\"covered\": true|false, \"confidence\": число 0..1}. Если речи недостаточно — covered=false."
+            "Ты мягкий помощник на экзамене. Оцени, покрыл ли студент тезис-подсказку в своём ответе. "
+            "ВАЖНО: будь снисходительным - учитывай опечатки распознавания речи (ASR), синонимы, перефразировки. "
+            "Если студент передал СУТЬ тезиса (даже другими словами) - считай covered=true. "
+            "Если разговор ушёл в другую тему совсем - covered=true (тема сменилась, тезис больше не актуален). "
+            "Ответ строго в JSON: {\"covered\": true|false, \"confidence\": 0..1}"
         )
         user_prompt = (
-            "Тезис:\n" + thesis.strip() + "\n\n" +
-            "Речь пользователя:\n" + spoken_text.strip() + "\n\n" +
-            "Оцени, передана ли суть тезиса, даже если формулировки отличаются."
+            "Тезис-подсказка:\n" + thesis.strip() + "\n\n" +
+            "Диалог:\n" + dialogue_text + "\n\n" +
+            "Покрыл ли студент тезис (передал суть) или разговор ушёл в другую тему? Будь мягким к опечаткам ASR."
         )
 
         cfg = types.GenerateContentConfig(
@@ -78,8 +102,20 @@ class GeminiJudge:
             return (False, 0.0)
 
         import json
+        import re
         try:
-            data = json.loads(raw)
+            # Убираем markdown код-блоки если есть
+            cleaned = raw
+            if '```json' in cleaned:
+                match = re.search(r'```json\s*(\{.*?\})\s*```', cleaned, re.DOTALL)
+                if match:
+                    cleaned = match.group(1)
+            elif '```' in cleaned:
+                match = re.search(r'```\s*(\{.*?\})\s*```', cleaned, re.DOTALL)
+                if match:
+                    cleaned = match.group(1)
+            
+            data = json.loads(cleaned)
             covered = bool(data.get("covered", False))
             conf = float(data.get("confidence", 0.0))
             conf = max(0.0, min(1.0, conf))
