@@ -362,15 +362,31 @@ class LiveVoiceVerifier:
 
         # Инициализируем TTS (RU по умолчанию), если он нужен для LLM
         if self.llm_enable:
-            if SileroTTS is not None:
+            # Пробуем сначала Google TTS (быстрее в 5-10 раз), fallback на Silero
+            if GoogleTTS is not None and GOOGLE_TTS_AVAILABLE:
+                try:
+                    self._tts = GoogleTTS(
+                        language="ru-RU",
+                        voice_name="ru-RU-Wavenet-D",  # Мужской, выразительный
+                        speaking_rate=1.0,
+                    )
+                    logger.info("✅ Используется Google TTS (быстрый, качественный)")
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(f"Google TTS недоступен: {e}, fallback на Silero TTS")
+                    self._tts = None
+            
+            # Fallback на Silero TTS если Google TTS недоступен
+            if self._tts is None and SileroTTS is not None:
                 try:
                     self._tts = SileroTTS(
                         language="ru", model_id="v4_ru", speaker="eugene", sample_rate=24000
                     )
+                    logger.info("⚠️ Используется Silero TTS (медленный, fallback)")
                 except Exception as e:  # noqa: BLE001
                     logger.exception(f"Не удалось инициализировать TTS: {e}")
-            else:
-                logger.debug("SileroTTS недоступен — озвучка отключена")
+            
+            if self._tts is None:
+                logger.debug("❌ TTS не установлен, озвучка недоступна")
 
         logger.info(
             f"LiveVoiceVerifier initialized | model={model_id}, device={self.device}, threshold={threshold}, VAD={self.vad_backend}"

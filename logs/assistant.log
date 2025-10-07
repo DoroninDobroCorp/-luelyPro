@@ -1,39 +1,47 @@
-2025-10-07 15:21:05.600 | INFO     | live_recognizer:setup_logging:104 - Логи пишутся в /Users/vladimirdoronin/VovkaNowEngineer/CluelyPro/logs/assistant.log
-2025-10-07 15:21:05.676 | INFO     | thesis_generator:__init__:41 - ThesisGenerator инициализирован: model=gemini-flash-lite-latest
-2025-10-07 15:21:05.676 | INFO     | live_recognizer:__init__:341 - Автогенерация тезисов Gemini включена
-2025-10-07 15:21:05.677 | INFO     | live_recognizer:__init__:372 - LiveVoiceVerifier initialized | model=speechbrain/spkrec-ecapa-voxceleb, device=cpu, threshold=0.3, VAD=webrtc
-2025-10-07 15:21:08.552 | INFO     | live_recognizer:enroll_cli:1765 - Для профиля выбран абзац 1 (29 слов)
-2025-10-07 15:21:09.916 | INFO     | live_recognizer:enroll_cli:1781 - Старт записи профиля: целевой лимит 20.0s, минимум озвученной речи 4.0s
-2025-10-07 15:21:10.028 | INFO     | live_recognizer:_collect_enrollment_audio:1024 - Говорите для записи профиля...
-2025-10-07 15:21:29.933 | DEBUG    | live_recognizer:_collect_enrollment_audio:1028 - Останавливаем запись профиля: достигнут лимит по времени
-2025-10-07 15:21:30.048 | INFO     | live_recognizer:_collect_enrollment_audio:1061 - Сегмент профиля собран: озвучено 15.04s, кадров 752
-2025-10-07 15:21:31.554 | INFO     | live_recognizer:enroll_cli:1795 - Профиль сохранён: profiles/vova.npz
-2025-10-07 15:21:31.597 | INFO     | thesis_generator:__init__:41 - ThesisGenerator инициализирован: model=gemini-flash-lite-latest
-2025-10-07 15:21:31.597 | INFO     | live_recognizer:__init__:341 - Автогенерация тезисов Gemini включена
-2025-10-07 15:21:31.597 | INFO     | asr_transcriber:_init:106 - Loading faster-whisper model=small device=cpu compute_type=int8 lang=ru
-2025-10-07 15:21:32.300 | INFO     | llm_answer:__init__:53 - LLM (Gemini) инициализирован: model=gemini-flash-latest
-2025-10-07 15:21:32.300 | INFO     | tts_silero:__init__:46 - Загрузка Silero TTS: lang=ru, model_id=v4_ru, speaker=eugene, sr=24000, device=cpu
-2025-10-07 15:21:33.303 | INFO     | live_recognizer:__init__:372 - LiveVoiceVerifier initialized | model=speechbrain/spkrec-ecapa-voxceleb, device=cpu, threshold=0.75, VAD=webrtc
-2025-10-07 15:21:36.023 | INFO     | live_recognizer:live_verify:1117 - Старт лайв-распознавания. Нажмите Ctrl+C для остановки. Говорите в микрофон.
-2025-10-07 15:21:40.591 | DEBUG    | live_recognizer:_segment_worker_loop:507 - мой голос (игнорируем)
-2025-10-07 15:21:43.419 | INFO     | live_recognizer:_handle_foreign_text:543 - Чужой голос (ASR: пусто)
-2025-10-07 15:21:44.638 | INFO     | live_recognizer:_handle_foreign_text:543 - Чужой голос (ASR: пусто)
-2025-10-07 15:21:47.423 | DEBUG    | live_recognizer:_segment_worker_loop:507 - мой голос (игнорируем)
-2025-10-07 15:21:59.618 | INFO     | live_recognizer:_handle_foreign_text:553 - Чужой голос (ASR): Расскажи плючевые события Японии 20 века.
-2025-10-07 15:22:00.275 | INFO     | live_recognizer:_handle_foreign_text:567 - Сгенерированы тезисы: ['Япония вступила в Первую мировую войну на стороне Антанты.', 'В 1923 году Великое землетрясение Канто разрушило Токио и Йокогаму.', 'После Второй мировой войны Япония приняла пацифистскую конституцию.']
-2025-10-07 15:22:00.307 | DEBUG    | live_recognizer:_speak_text:1311 - Наушники - блокировка не нужна
-2025-10-07 15:22:03.834 | DEBUG    | live_recognizer:_speak_text:1311 - Наушники - блокировка не нужна
-2025-10-07 15:22:08.839 | DEBUG    | live_recognizer:_speak_text:1311 - Наушники - блокировка не нужна
-2025-10-07 15:22:14.123 | INFO     | live_recognizer:_handle_foreign_text:581 - LLM ответ: Япония участвовала в Русско-японской войне с тысяча девятьсот четвёртого по тысяча девятьсот пятый год. В результате войны Япония получила контроль над Кореей и Южным Сахалином.
-
-В тысяча девятьсот тридцать первом году Япония вторглась в Маньчжурию. Это привело к созданию марионеточного государства Маньчжоу-го.
-
-Япония вступила во Вторую мировую войну нападением на Пёрл-Харбор седьмого декабря тысяча девятьсот сорок первого года. Война завершилась капитуляцией Японии второго сентября тысяча девятьсот сорок пятого года после атомных бом
-2025-10-07 15:22:14.243 | DEBUG    | live_recognizer:_speak_text:1311 - Наушники - блокировка не нужна
-2025-10-07 15:22:23.124 | DEBUG    | live_recognizer:_speak_text:1311 - Наушники - блокировка не нужна
-2025-10-07 15:22:23.294 | WARNING  | live_recognizer:_enqueue_segment:476 - Очередь сегментов переполнена, отбрасываю other сегмент
-2025-10-07 15:22:26.904 | WARNING  | live_recognizer:_enqueue_segment:476 - Очередь сегментов переполнена, отбрасываю other сегмент
-2025-10-07 15:22:30.487 | DEBUG    | live_recognizer:_speak_text:1311 - Наушники - блокировка не нужна
-2025-10-07 15:22:30.504 | WARNING  | live_recognizer:_enqueue_segment:476 - Очередь сегментов переполнена, отбрасываю other сегмент
-2025-10-07 15:22:36.521 | INFO     | live_recognizer:live_verify:1213 - Остановлено пользователем
-2025-10-07 15:22:36.826 | DEBUG    | live_recognizer:_speak_text:1311 - Наушники - блокировка не нужна
+2025-10-07 15:33:50.981 | INFO     | live_recognizer:setup_logging:104 - Логи пишутся в /Users/vladimirdoronin/VovkaNowEngineer/CluelyPro/logs/assistant.log
+2025-10-07 15:33:51.056 | INFO     | thesis_generator:__init__:41 - ThesisGenerator инициализирован: model=gemini-flash-lite-latest
+2025-10-07 15:33:51.056 | INFO     | live_recognizer:__init__:344 - Автогенерация тезисов Gemini включена
+2025-10-07 15:33:51.056 | INFO     | live_recognizer:__init__:375 - LiveVoiceVerifier initialized | model=speechbrain/spkrec-ecapa-voxceleb, device=cpu, threshold=0.3, VAD=webrtc
+2025-10-07 15:33:53.819 | INFO     | live_recognizer:enroll_cli:1791 - Для профиля выбран абзац 3 (31 слов)
+2025-10-07 15:33:55.254 | INFO     | live_recognizer:enroll_cli:1807 - Старт записи профиля: целевой лимит 20.0s, минимум озвученной речи 4.0s
+2025-10-07 15:33:55.349 | INFO     | live_recognizer:_collect_enrollment_audio:1050 - Говорите для записи профиля...
+2025-10-07 15:34:09.397 | DEBUG    | live_recognizer:_collect_enrollment_audio:1061 - Останавливаем запись профиля: зафиксирована тишина после речи
+2025-10-07 15:34:09.512 | INFO     | live_recognizer:_collect_enrollment_audio:1087 - Сегмент профиля собран: озвучено 12.12s, кадров 606
+2025-10-07 15:34:10.188 | INFO     | live_recognizer:enroll_cli:1821 - Профиль сохранён: profiles/v.npz
+2025-10-07 15:34:10.231 | INFO     | thesis_generator:__init__:41 - ThesisGenerator инициализирован: model=gemini-flash-lite-latest
+2025-10-07 15:34:10.231 | INFO     | live_recognizer:__init__:344 - Автогенерация тезисов Gemini включена
+2025-10-07 15:34:10.231 | INFO     | asr_transcriber:_init:106 - Loading faster-whisper model=small device=cpu compute_type=int8 lang=ru
+2025-10-07 15:34:10.885 | INFO     | llm_answer:__init__:53 - LLM (Gemini) инициализирован: model=gemini-flash-latest
+2025-10-07 15:34:10.885 | INFO     | tts_silero:__init__:46 - Загрузка Silero TTS: lang=ru, model_id=v4_ru, speaker=eugene, sr=24000, device=cpu
+2025-10-07 15:34:11.891 | INFO     | live_recognizer:__init__:375 - LiveVoiceVerifier initialized | model=speechbrain/spkrec-ecapa-voxceleb, device=cpu, threshold=0.75, VAD=webrtc
+2025-10-07 15:34:14.633 | INFO     | live_recognizer:live_verify:1143 - Старт лайв-распознавания. Нажмите Ctrl+C для остановки. Говорите в микрофон.
+2025-10-07 15:34:19.799 | DEBUG    | live_recognizer:_segment_worker_loop:510 - мой голос (игнорируем)
+2025-10-07 15:34:22.083 | INFO     | live_recognizer:_handle_foreign_text:546 - Чужой голос (ASR: пусто)
+2025-10-07 15:34:23.905 | INFO     | live_recognizer:_handle_foreign_text:546 - Чужой голос (ASR: пусто)
+2025-10-07 15:34:30.069 | INFO     | live_recognizer:_handle_foreign_text:556 - Чужой голос (ASR): Расскажи ключевые события Японии 20 века.
+2025-10-07 15:34:30.069 | DEBUG    | live_recognizer:_handle_foreign_text:568 - Контекст диалога (1 реплик за 30.0с):
+Расскажи ключевые события Японии 20 века.
+2025-10-07 15:34:30.890 | INFO     | live_recognizer:_handle_foreign_text:596 - Сгенерированы тезисы (5): ['Первая мировая война принесла Японии территориальные приобретения', 'В 1923 году произошло Великое землетрясение Канто', 'В 1930-х годах Япония начала агрессивную экспансию в Азии', 'Япония потерпела поражение во Второй мировой войне в 1945 году', 'Послевоенная оккупация привела к демократизации страны']
+2025-10-07 15:34:30.944 | DEBUG    | live_recognizer:_speak_text:1337 - Наушники - блокировка не нужна
+2025-10-07 15:34:34.739 | DEBUG    | live_recognizer:_speak_text:1337 - Наушники - блокировка не нужна
+2025-10-07 15:34:38.833 | DEBUG    | live_recognizer:_speak_text:1337 - Наушники - блокировка не нужна
+2025-10-07 15:34:42.750 | DEBUG    | live_recognizer:_speak_text:1337 - Наушники - блокировка не нужна
+2025-10-07 15:34:46.869 | DEBUG    | live_recognizer:_speak_text:1337 - Наушники - блокировка не нужна
+2025-10-07 15:34:46.895 | WARNING  | live_recognizer:_enqueue_segment:479 - Очередь сегментов переполнена, отбрасываю other сегмент
+2025-10-07 15:34:51.241 | DEBUG    | live_recognizer:_speak_text:1337 - Наушники - блокировка не нужна
+2025-10-07 15:34:51.423 | WARNING  | live_recognizer:_enqueue_segment:479 - Очередь сегментов переполнена, отбрасываю other сегмент
+2025-10-07 15:34:55.535 | WARNING  | live_recognizer:_enqueue_segment:479 - Очередь сегментов переполнена, отбрасываю other сегмент
+2025-10-07 15:34:55.804 | DEBUG    | live_recognizer:_speak_text:1337 - Наушники - блокировка не нужна
+2025-10-07 15:34:59.020 | WARNING  | live_recognizer:_enqueue_segment:479 - Очередь сегментов переполнена, отбрасываю other сегмент
+2025-10-07 15:34:59.082 | DEBUG    | live_recognizer:_speak_text:1337 - Наушники - блокировка не нужна
+2025-10-07 15:35:02.281 | WARNING  | live_recognizer:_enqueue_segment:479 - Очередь сегментов переполнена, отбрасываю other сегмент
+2025-10-07 15:35:02.561 | DEBUG    | live_recognizer:_speak_text:1337 - Наушники - блокировка не нужна
+2025-10-07 15:35:05.975 | DEBUG    | live_recognizer:_speak_text:1337 - Наушники - блокировка не нужна
+2025-10-07 15:35:05.993 | WARNING  | live_recognizer:_enqueue_segment:479 - Очередь сегментов переполнена, отбрасываю other сегмент
+2025-10-07 15:35:09.299 | WARNING  | live_recognizer:_enqueue_segment:479 - Очередь сегментов переполнена, отбрасываю other сегмент
+2025-10-07 15:35:10.977 | INFO     | live_recognizer:_handle_foreign_text:556 - Чужой голос (ASR): Япония потерпела поражение во Второй мировой войне в году.
+2025-10-07 15:35:10.978 | DEBUG    | live_recognizer:_handle_foreign_text:568 - Контекст диалога (1 реплик за 30.0с):
+Япония потерпела поражение во Второй мировой войне в году.
+2025-10-07 15:35:11.654 | INFO     | live_recognizer:_handle_foreign_text:596 - Сгенерированы тезисы (5): ['Япония потерпела поражение во Второй мировой войне', 'Поражение случилось в году', 'Война была Второй мировой', 'Страна-участник — Япония', 'Контекст касается военного поражения']
+2025-10-07 15:35:11.666 | INFO     | live_recognizer:live_verify:1239 - Остановлено пользователем
+2025-10-07 15:35:11.682 | DEBUG    | live_recognizer:_speak_text:1337 - Наушники - блокировка не нужна
