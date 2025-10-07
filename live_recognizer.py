@@ -313,6 +313,9 @@ class LiveVoiceVerifier:
         self._thesis_generator: Optional[GeminiThesisGenerator] = None
         self._max_theses_history: int = 50  # Лимит для очистки старых тезисов
         self._last_announce_ts: float = 0.0
+        # Контекст диалога за последние 30 секунд (для местоимений)
+        self._dialogue_context: list[tuple[float, str]] = []  # [(timestamp, text), ...]
+        self._context_window_sec: float = 30.0  # Окно контекста в секундах
         self._segment_queue: "queue.Queue[QueuedSegment]" = queue.Queue(maxsize=4)
         self._segment_worker: Optional[threading.Thread] = None
         self._segment_stop = threading.Event()
@@ -552,8 +555,19 @@ class LiveVoiceVerifier:
         
         logger.info(f"Чужой голос (ASR): {t}")
         
-        # 1. Генерируем тезисы через thesis_generator (если доступен)
-        theses = []
+        # Добавляем вопрос в контекст диалога
+        now = time.time()
+        self._dialogue_context.append((now, t))
+        
+        # Очищаем старый контекст (>30 сек)
+        cutoff_time = now - self._context_window_sec
+        self._dialogue_context = [(ts, txt) for ts, txt in self._dialogue_context if ts >= cutoff_time]
+        
+        # Формируем строку контекста для передачи в thesis_generator
+        context_text = "\n".join([txt for _, txt in self._dialogue_context])
+        logger.debug(f"Контекст диалога ({len(self._dialogue_context)} реплик за {self._context_window_sec}с):\n{context_text}")
+        
+        # Генерируем тезисы через thesis_generator (формат: "тезис1 ||| тезис2 ||| тезис3")
         if self._thesis_generator is None and GeminiThesisGenerator is not None:
             try:
                 self._thesis_generator = GeminiThesisGenerator()
@@ -562,26 +576,38 @@ class LiveVoiceVerifier:
         
         if self._thesis_generator:
             try:
-                theses = self._thesis_generator.generate(t, n=3)
+                # Передаем весь контекст для понимания местоимений
+                theses_raw = self._thesis_generator.generate(context_text, n=5, language="ru")
+                
+                # Парсим тезисы - ожидаем список строк или одну строку с |||
+                theses = []
+                if isinstance(theses_raw, list):
+                    # Если список - парсим каждую строку отдельно
+                    for item in theses_raw:
+                        if "|||" in item:
+                            theses.extend([t.strip() for t in item.split("|||") if t.strip()])
+                        else:
+                            theses.append(item.strip())
+                elif isinstance(theses_raw, str):
+                    # Если строка - парсим по |||
+                    theses = [t.strip() for t in theses_raw.split("|||") if t.strip()]
+                
                 if theses:
-                    logger.info(f"Сгенерированы тезисы: {theses}")
-                    # Озвучиваем тезисы по очереди (асинхронно, не блокируя микрофон)
+                    logger.info(f"Сгенерированы тезисы ({len(theses)}): {theses}")
+                    
+                    # Озвучиваем каждый тезис 2 РАЗА (с паузой)
                     for i, thesis in enumerate(theses, 1):
                         text_to_speak = f"{i}. {thesis}"
+                        # Первый раз
                         self._speak_text(text_to_speak)
-                        time.sleep(0.3)  # Небольшая пауза между тезисами
+                        time.sleep(0.3)
+                        # Второй раз
+                        self._speak_text(text_to_speak)
+                        time.sleep(0.5)  # Пауза перед следующим тезисом
+                else:
+                    logger.warning("Тезисы не сгенерированы (пустой результат)")
             except Exception as e:
                 logger.error(f"Ошибка генерации тезисов: {e}")
-        
-        # 2. Генерируем LLM ответ (если включен)
-        if self.llm_enable and self._llm is not None:
-            try:
-                ans = (self._llm.generate(t) or "").strip()
-                if ans:
-                    logger.info(f"LLM ответ: {ans}")
-                    self._speak_text(ans)
-            except Exception as e:
-                logger.error(f"LLM ошибка: {e}")
 
     @staticmethod
     def _answer_math_if_any(text: str) -> Optional[str]:

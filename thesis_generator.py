@@ -45,18 +45,19 @@ class GeminiThesisGenerator:
             return []
         n = max(1, int(n))
         sys_instr = (
-            "Ты генератор фактов для экзамена."
+            "Ты генератор тезисов для устных экзаменов."
             " СТРОГИЕ ПРАВИЛА:"
-            " 1. Каждый факт - короткое предложение (5-10 слов)"
-            " 2. ТОЛЬКО конкретные неочевидные факты"
-            ' 3. НЕ ЗНАЕШЬ ТЕМУ -> {"theses": []} БЕЗ ОБЪЯСНЕНИЙ'
-            " 4. ЗАПРЕЩЕНЫ объяснения типа 'не указан', 'нет информации', 'не знаю'"
-            ' 5. ТОЛЬКО JSON: {"theses": ["факт1"]} ИЛИ {"theses": []}'
-            " 6. НИКОГДА не пиши тезисы о том что чего-то нет или не знаешь"
+            " 1. Каждый тезис - короткое предложение (до 15 слов)"
+            " 2. ТОЛЬКО конкретные факты, без воды"
+            " 3. Учитывай местоимения из контекста (ОН, ЭТО, ТАМ, ЕГО)"
+            " 4. ФОРМАТ ОТВЕТА: тезис1 ||| тезис2 ||| тезис3"
+            " 5. НЕ ЗНАЕШЬ ТЕМУ -> пустая строка БЕЗ ОБЪЯСНЕНИЙ"
+            " 6. ЗАПРЕЩЕНЫ объяснения типа 'не указан', 'нет информации', 'не знаю'"
         )
         user_prompt = (
-            f"Тема: {question_text.strip()}\n\n"
-            f"Дай {n} фактов. Не знаешь тему -> пустой массив []"
+            f"Контекст диалога (последние 30 сек):\n{question_text.strip()}\n\n"
+            f"Дай {n} тезисов в формате: тезис1 ||| тезис2 ||| тезис3\n"
+            f"Если тема непонятна -> пустая строка (БЕЗ объяснений)"
         )
         cfg = types.GenerateContentConfig(
             system_instruction=sys_instr,
@@ -76,7 +77,15 @@ class GeminiThesisGenerator:
             logger.exception(f"ThesisGenerator ошибка: {e}")
             return []
 
+        # Парсинг ответа: ожидаем формат "тезис1 ||| тезис2 ||| тезис3"
         import json
+        
+        # Попытка 1: парсим по разделителю |||
+        if "|||" in raw:
+            theses = [t.strip() for t in raw.split("|||") if t.strip()]
+            return theses[:n]
+        
+        # Попытка 2: парсим как JSON (fallback для старого формата)
         try:
             data = json.loads(raw)
             items = data.get("theses", [])
@@ -88,12 +97,14 @@ class GeminiThesisGenerator:
                 if not t:
                     continue
                 out.append(t)
-            return out
-        except Exception:
-            # fallback: иногда модель вернёт список как текст с переносами строк
-            lines = [ln.strip("-•* \t") for ln in raw.splitlines()]
-            out: List[str] = [ln for ln in lines if ln]
             return out[:n]
+        except Exception:
+            pass
+        
+        # Попытка 3: построчный парсинг (fallback)
+        lines = [ln.strip("-•* \t") for ln in raw.splitlines()]
+        out: List[str] = [ln for ln in lines if ln]
+        return out[:n]
 
 
 __all__ = ["GeminiThesisGenerator", "ThesisGenConfig"]
