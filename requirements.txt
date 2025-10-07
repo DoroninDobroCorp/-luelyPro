@@ -22,3 +22,8 @@ openai>=1.0.0
 speechbrain>=1.0.0
 omegaconf>=2.3.0
 scipy>=1.11.0
+
+# TTS - Google Cloud (РЕКОМЕНДУЕТСЯ: быстрее в 5-10 раз!)
+# Установка: pip install google-cloud-texttospeech
+# Настройка: см. GOOGLE_TTS_SETUP.md
+google-cloud-texttospeech>=2.14.0  # Опционально
