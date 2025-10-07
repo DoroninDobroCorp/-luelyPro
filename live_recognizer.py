@@ -362,8 +362,11 @@ class LiveVoiceVerifier:
 
         # Инициализируем TTS (RU по умолчанию), если он нужен для LLM
         if self.llm_enable:
-            # Пробуем сначала Google TTS (быстрее в 5-10 раз), fallback на Silero
-            if GoogleTTS is not None and GOOGLE_TTS_AVAILABLE:
+            # Проверяем переменную окружения USE_GOOGLE_TTS (по умолчанию false)
+            use_google_tts = os.getenv("USE_GOOGLE_TTS", "false").lower() in ("true", "1", "yes")
+            
+            # Google TTS (ОПЦИОНАЛЬНО - только если явно включен через USE_GOOGLE_TTS=true)
+            if use_google_tts and GoogleTTS is not None and GOOGLE_TTS_AVAILABLE:
                 try:
                     self._tts = GoogleTTS(
                         language="ru-RU",
@@ -372,21 +375,24 @@ class LiveVoiceVerifier:
                     )
                     logger.info("✅ Используется Google TTS (быстрый, качественный)")
                 except Exception as e:  # noqa: BLE001
-                    logger.warning(f"Google TTS недоступен: {e}, fallback на Silero TTS")
+                    logger.warning(f"Google TTS недоступен: {e}, переключаюсь на Silero TTS")
                     self._tts = None
             
-            # Fallback на Silero TTS если Google TTS недоступен
+            # Silero TTS (ПО УМОЛЧАНИЮ - работает из коробки)
             if self._tts is None and SileroTTS is not None:
                 try:
                     self._tts = SileroTTS(
                         language="ru", model_id="v4_ru", speaker="eugene", sample_rate=24000
                     )
-                    logger.info("⚠️ Используется Silero TTS (медленный, fallback)")
+                    if use_google_tts:
+                        logger.info("⚠️ Используется Silero TTS (Google TTS недоступен)")
+                    else:
+                        logger.info("✅ Используется Silero TTS")
                 except Exception as e:  # noqa: BLE001
                     logger.exception(f"Не удалось инициализировать TTS: {e}")
             
             if self._tts is None:
-                logger.debug("❌ TTS не установлен, озвучка недоступна")
+                logger.warning("❌ TTS не установлен, озвучка недоступна")
 
         logger.info(
             f"LiveVoiceVerifier initialized | model={model_id}, device={self.device}, threshold={threshold}, VAD={self.vad_backend}"
