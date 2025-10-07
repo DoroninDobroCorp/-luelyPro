@@ -1377,8 +1377,10 @@ class LiveVoiceVerifier:
                     sd.stop()
                     # ВАЖНО: self._is_announcing блокирует повторные объявления тезисов
                     # Спим полную длительность аудио чтобы дождаться завершения
-                    sd.play(audio, samplerate=self._tts.sample_rate)
-                    time.sleep(duration + 0.1)  # Небольшой запас
+                    # Используем device=None чтобы sounddevice использовал системный вывод по умолчанию
+                    # (наушники если подключены, иначе динамик)
+                    sd.play(audio, samplerate=self._tts.sample_rate, device=None)
+                    sd.wait()  # Ждём завершения воспроизведения вместо time.sleep
         except Exception as e:  # noqa: BLE001
             logger.exception(f"TTS ошибка: {e}")
 
