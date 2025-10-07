@@ -371,8 +371,8 @@ class LiveVoiceVerifier:
             except Exception as e:  # noqa: BLE001
                 logger.exception(f"Не удалось инициализировать LLMResponder: {e}")
 
-        # Инициализируем TTS (RU по умолчанию), если он нужен для LLM или тезисов
-        if self.llm_enable or self.thesis_prompter is not None:
+        # Инициализируем TTS (RU по умолчанию), если он нужен для LLM
+        if self.llm_enable:
             if SileroTTS is not None:
                 try:
                     self._tts = SileroTTS(
@@ -504,7 +504,7 @@ class LiveVoiceVerifier:
         while not self._thesis_repeat_stop.is_set():
             try:
                 time_since_last = time.time() - self._last_announce_ts
-                has_pending = self.thesis_prompter is not None and self.thesis_prompter.has_pending()
+                has_pending = False  # thesis_prompter больше не используется
                 not_suppressed = time.time() >= self._suppress_until
                 not_announcing = not self._is_announcing
                 
@@ -525,9 +525,8 @@ class LiveVoiceVerifier:
         logger.debug("🛑 Фоновый поток thesis_repeater остановлен")
 
     def _announce_next_thesis_in_cycle(self) -> None:
-        tp = self.thesis_prompter
-        if tp is None or not tp.has_pending():
-            return
+        # Метод больше не используется (thesis_prompter удален)
+        return
         # синхронизация индекса цикла с первым незакрытым
         start_idx = getattr(tp, "_index", 0)
         total = len(getattr(tp, "theses", []))
@@ -638,184 +637,51 @@ class LiveVoiceVerifier:
             logger.info("незнакомый голос")
 
     def _handle_foreign_text(self, text: Optional[str]) -> None:
+        """Обработка чужого голоса: ASR → генерация тезисов → LLM ответ → TTS"""
         t = (text or "").strip()
         if not t:
-            logger.info("незнакомый голос (ASR: пусто)")
+            logger.info("Чужой голос (ASR: пусто)")
             return
+        
         # Проверяем не слишком ли рано после TTS (может быть эхо)
-        # Но ТОЛЬКО если НЕ используем наушники (в наушниках микрофон не слышит TTS)
+        # Но ТОЛЬКО если НЕ используем наушники
         if not self._use_headphones and time.time() < self._suppress_until:
             time_left = self._suppress_until - time.time()
             logger.debug(f"Игнорирую вход (suppress ещё {time_left:.1f}с): {t}")
             return
-        logger.info(f"незнакомый голос (ASR): {t}")
         
-        # Сохраняем последний вопрос для контекста тезисов
-        self._last_question = t
-        # Быстрый хэндлер простых математических запросов
-        try:
-            math_ans = self._answer_math_if_any(t)
-        except Exception:
-            math_ans = None
-        if math_ans:
-            logger.info(f"Ответ: {math_ans}")
-            self._speak_text(math_ans)
-            return
-        # Жёсткие исключения: некоторые триггеры не считаем вопросами и не обрабатываем
-        try:
-            if self._should_ignore_non_question_text(t):
-                logger.debug("Игнорирую нерелевантный триггер (музыка и т.п.)")
-                return
-        except Exception:
-            pass
-        # Режим комментариев: генерируем короткие факт-заметки даже без явных вопросов
-        if getattr(self, "_commentary_mode", False):
+        logger.info(f"Чужой голос (ASR): {t}")
+        
+        # 1. Генерируем тезисы через thesis_generator (если доступен)
+        theses = []
+        if self._thesis_generator is None and GeminiThesisGenerator is not None:
             try:
-                facts = self._extract_commentary_facts(t)
-            except Exception:
-                facts = []
-            if facts:
-                items = facts[: min(3, len(facts))]
-                self.thesis_prompter = ThesisPrompter(
-                    theses=items,
-                    match_threshold=self._thesis_match_threshold,
-                    enable_semantic=False,
-                    semantic_threshold=self._thesis_semantic_threshold,
-                    semantic_model_id=self._thesis_semantic_model,
-                    enable_gemini=True,
-                    gemini_min_conf=self._thesis_gemini_min_conf,
-                )
-                self._thesis_done_notified = False
-                logger.info(f"Комментарии (новые): {', '.join(items)}")
-                self._announce_thesis()
-                return
-        # Если включён LLM — генерируем краткий ответ сразу
-        # И ИСПОЛЬЗУЕМ ОТВЕТ КАК ТЕЗИС!
-        llm_answer = None
+                self._thesis_generator = GeminiThesisGenerator()
+            except Exception as e:
+                logger.warning(f"Не удалось создать thesis_generator: {e}")
+        
+        if self._thesis_generator:
+            try:
+                theses = self._thesis_generator.generate(t, n=3)
+                if theses:
+                    logger.info(f"Сгенерированы тезисы: {theses}")
+                    # Озвучиваем тезисы по очереди (асинхронно, не блокируя микрофон)
+                    for i, thesis in enumerate(theses, 1):
+                        text_to_speak = f"{i}. {thesis}"
+                        self._speak_text(text_to_speak)
+                        time.sleep(0.3)  # Небольшая пауза между тезисами
+            except Exception as e:
+                logger.error(f"Ошибка генерации тезисов: {e}")
+        
+        # 2. Генерируем LLM ответ (если включен)
         if self.llm_enable and self._llm is not None:
             try:
-                prompt = t
-                ans = (self._llm.generate(prompt) or "").strip()
+                ans = (self._llm.generate(t) or "").strip()
                 if ans:
-                    try:
-                        ans = self._enforce_answer_then_question(ans)
-                    except Exception:
-                        pass
-                    # По желанию можно добавить исходный вопрос в конец ответа
-                    if getattr(self, "_append_question_to_answer", False):
-                        try:
-                            import re
-                            qs = self._extract_questions(t)
-                            if qs:
-                                q_joined = " ".join(qs).strip()
-                                # Добавим вопрос, если его ещё нет в тексте ответа
-                                norm = lambda x: re.sub(r"[\s\.!?]+", " ", (x or "").strip().lower())
-                                if norm(q_joined) not in norm(ans):
-                                    ans = f"{ans} {q_joined}".strip()
-                        except Exception:
-                            pass
-                    logger.info(f"Ответ: {ans}")
+                    logger.info(f"LLM ответ: {ans}")
                     self._speak_text(ans)
-                    llm_answer = ans  # Сохраняем для использования как тезис
-            except Exception as e:  # noqa: BLE001
-                logger.exception(f"LLM ошибка при генерации ответа: {e}")
-        
-        # Если есть ответ от LLM - используем его как тезис (если это НЕ отказ)
-        if llm_answer:
-            # Фильтруем "плохие" ответы - не создаём тезис из них
-            bad_patterns = [
-                "не ясен",
-                "не понял",
-                "не понятен", 
-                "перефразируйте",
-                "уточните",
-                "не могу ответить",
-                "недостаточно информации",
-            ]
-            is_bad_answer = any(pattern.lower() in llm_answer.lower() for pattern in bad_patterns)
-            
-            if is_bad_answer:
-                logger.warning(f"⚠️ Ответ LLM не подходит для тезиса (отказ): {llm_answer[:50]}...")
-                # Не создаём тезис, продолжаем обычную обработку
-            else:
-                # УМНАЯ ЗАМЕНА: проверяем нужно ли заменить набор тезисов
-                # Если есть незакрытые тезисы - ВСЕГДА добавляем (накопление)
-                has_pending = self.thesis_prompter is not None and self.thesis_prompter.has_pending()
-                
-                if has_pending:
-                    # Если есть незакрытые тезисы - добавляем к ним
-                    should_replace = False
-                    logger.debug("Есть незакрытые тезисы - добавляем новый")
-                else:
-                    # Если все тезисы закрыты - проверяем смену темы
-                    should_replace = self._should_replace_thesis_set(new_question=t, new_thesis=llm_answer)
-                
-                if should_replace or self.thesis_prompter is None:
-                    # Создаём НОВЫЙ набор тезисов (смена темы)
-                    # ВАЖНО: Сбрасываем счетчики повторов при смене темы
-                    self._thesis_repeat_counts.clear()
-                    self.thesis_prompter = ThesisPrompter(
-                        theses=[llm_answer],
-                        match_threshold=self._thesis_match_threshold,
-                        enable_semantic=False,
-                        semantic_threshold=self._thesis_semantic_threshold,
-                        semantic_model_id=self._thesis_semantic_model,
-                        enable_gemini=True,
-                        gemini_min_conf=self._thesis_gemini_min_conf,
-                    )
-                    # Добавляем вопрос экзаменатора в контекст СРАЗУ после создания
-                    if self._last_question:
-                        self.thesis_prompter._dialogue_context.append(("экзаменатор", self._last_question))
-                    self._thesis_done_notified = False
-                    logger.info(f"🔄 НОВЫЙ набор тезисов (смена темы): {llm_answer}")
-                else:
-                    # ДОБАВЛЯЕМ к существующим (продолжение темы)
-                    current_theses = getattr(self.thesis_prompter, "theses", [])
-                    current_theses.append(llm_answer)
-                    # Ограничиваем до 5 тезисов максимум
-                    if len(current_theses) > 5:
-                        current_theses = current_theses[-5:]
-                        logger.debug("Ограничили набор до 5 последних тезисов")
-                    self.thesis_prompter.theses = current_theses
-                    # При добавлении тезиса ЗАНОВО (даже если был раньше) - счетчик с нуля
-                    if llm_answer in self._thesis_repeat_counts:
-                        logger.debug(f"♻️ Тезис добавлен повторно (сброс счетчика): {llm_answer[:50]}...")
-                        self._thesis_repeat_counts[llm_answer] = 0
-                    logger.info(f"➕ ДОБАВЛЕН тезис к набору (всего: {len(current_theses)}): {llm_answer}")
-                
-                self._announce_thesis()
-                return
-        # Быстрая обработка тезисов через AI
-        if self._ai_only_thesis:
-            theses = self._extract_theses_ai(t)
-            if theses:
-                # Ограничиваем количество тезисов для скорости
-                limited_theses = theses[:min(3, len(theses))]
-                self.thesis_prompter = ThesisPrompter(
-                    theses=limited_theses,
-                    match_threshold=self._thesis_match_threshold,
-                    enable_semantic=False,
-                    semantic_threshold=self._thesis_semantic_threshold,
-                    semantic_model_id=self._thesis_semantic_model,
-                    enable_gemini=True,
-                    gemini_min_conf=self._thesis_gemini_min_conf,
-                )
-                self._thesis_done_notified = False
-                logger.info(f"Тезисы (новые): {', '.join(limited_theses)}")
-                # Анонсируем через общий механизм, чтобы писалось в логи и работал автоповтор
-                self._announce_thesis()
-            else:
-                logger.debug("ИИ не нашёл вопросов/тезисов в фрагменте — пропускаю")
-            return
-        # Обработка вопросов - упрощаем
-        questions = self._extract_questions(t)
-        questions = self._filter_questions_by_importance(questions)
-        if questions:
-            q_joined = " ".join(questions)
-            self._append_question_context(q_joined)
-            self._maybe_generate_theses()
-        else:
-            logger.debug("Пропускаю нерелевантный/не-вопрос текст собеседника")
+            except Exception as e:
+                logger.error(f"LLM ошибка: {e}")
 
     @staticmethod
     def _answer_math_if_any(text: str) -> Optional[str]:
@@ -1724,187 +1590,6 @@ class LiveVoiceVerifier:
             # Сохраняем только последние N тезисов
             recent = list(self._theses_history)[-self._max_theses_history:]
             self._theses_history = set(recent)
-
-    def _request_additional_theses(self) -> None:
-        """Запрашивает дополнительные тезисы, передавая уже озвученные."""
-        if not self._thesis_generator or not self.thesis_prompter:
-            return
-        
-        qtext = self._question_context.strip()
-        if not qtext:
-            return
-        
-        # Собираем уже озвученные тезисы
-        current_theses = getattr(self.thesis_prompter, "theses", [])
-        announced_theses = "\n".join(f"- {t}" for t in current_theses)
-        
-        # Формируем запрос на дополнительные тезисы
-        extended_prompt = f"{qtext}\n\nУже озвученные факты:\n{announced_theses}\n\nДай ЕЩЕ 3-5 новых фактов, НЕ повторяя уже сказанное."
-        
-        try:
-            candidates = self._thesis_generator.generate(extended_prompt, n=5, language="ru")
-            if candidates:
-                # Фильтруем дубликаты
-                new_items = [c.strip() for c in candidates if c.strip().lower() not in self._theses_history]
-                if new_items:
-                    for item in new_items:
-                        self._theses_history.add(item.strip().lower())
-                    # Добавляем к текущему помощнику
-                    current_theses.extend(new_items)
-                    logger.info(f"➕ Добавлено {len(new_items)} дополнительных тезисов")
-        except Exception as e:
-            logger.exception(f"Ошибка запроса дополнительных тезисов: {e}")
-    
-    def _is_short_specific_question(self, text: str) -> bool:
-        """Определяет, является ли вопрос коротким и конкретным (требует 1 тезис) или развернутым (требует 5 тезисов)."""
-        if not text:
-            return True
-        # Короткие вопросы - обычно < 10 слов и начинаются с вопросительных слов
-        words = text.split()
-        if len(words) <= 10:
-            first_word = words[0].lower()
-            short_question_starts = ["что", "кто", "где", "когда", "сколько", "какой", "какая", "какое"]
-            if any(first_word.startswith(q) for q in short_question_starts):
-                return True
-        return False
-    
-    def _maybe_generate_theses(self) -> None:
-        if not self._thesis_autogen_enable or self._thesis_generator is None:
-            return
-        need_new_batch = False
-        if self.thesis_prompter is None:
-            need_new_batch = True
-        else:
-            if not self.thesis_prompter.has_pending():
-                need_new_batch = True
-        if not need_new_batch:
-            return
-        qtext = self._question_context.strip()
-        if not qtext:
-            return
-        
-        # Определяем тип вопроса: короткий четкий (1 тезис) vs развернутый/тема (5 тезисов)
-        is_short_question = self._is_short_specific_question(qtext)
-        n_theses = 1 if is_short_question else 5
-        
-        try:
-            candidates = self._thesis_generator.generate(qtext, n=n_theses, language="ru")
-        except Exception as e:  # noqa: BLE001
-            logger.exception(f"Ошибка автогенерации тезисов: {e}")
-            return
-        # Быстрая фильтрация дублей 
-        new_items: list[str] = []
-        for c in candidates:
-            key = c.strip().lower()
-            if not key or key in self._theses_history:
-                continue
-            self._theses_history.add(key)
-            new_items.append(c.strip())
-            # Ограничиваем количество тезисов
-            if len(new_items) >= 3:
-                break
-        if not new_items:
-            return
-        # Создаём упрощённый помощник без лишних проверок
-        self.thesis_prompter = ThesisPrompter(
-            theses=new_items,
-            match_threshold=self._thesis_match_threshold,
-            enable_semantic=False,
-            semantic_threshold=self._thesis_semantic_threshold,
-            semantic_model_id=self._thesis_semantic_model,
-            enable_gemini=True,
-            gemini_min_conf=self._thesis_gemini_min_conf,
-        )
-        self._thesis_done_notified = False
-        logger.info(f"Тезисы (новые): {', '.join(new_items)}")
-        # Анонсируем через общий механизм, чтобы писалось в логи и работал автоповтор
-        self._announce_thesis()
-
-    def _announce_theses_batch(self, theses: list[str]) -> None:
-        if not theses:
-            return
-        # Озвучиваем только сами тезисы, без лишних префиксов
-        # Берём только первые 2-3 тезиса для краткости
-        to_announce = theses[:min(3, len(theses))]
-        for i, thesis in enumerate(to_announce, 1):
-            # Краткое озвучивание: только номер и тезис
-            text = f"{i}. {thesis}"
-            self._speak_text(text)
-            # Небольшая пауза между тезисами
-            time.sleep(0.2)
-        self._last_announce_ts = time.time()
-        if self.thesis_prompter is not None:
-            self.thesis_prompter.reset_announcement()
-
-    def _announce_thesis(self, thesis_index: Optional[int] = None) -> None:
-        """
-        Озвучивает тезис В ОБРАТНОМ ПОРЯДКЕ (последний → первый).
-        thesis_index: если указан, озвучивает конкретный тезис БЕЗ смены _index.
-                      если None, озвучивает текущий тезис (по _index) в ОБРАТНОМ порядке.
-        """
-        if self.thesis_prompter is None:
-            return
-        if not self.thesis_prompter.has_pending():
-            if not self._thesis_done_notified:
-                logger.info("Все тезисы пройдены")
-                self._thesis_done_notified = True
-            return
-        
-        # Ждём пока закончится suppress (TTS ответа LLM), иначе будет перебивать
-        if time.time() < self._suppress_until:
-            logger.debug(f"Откладываем объявление тезиса - suppress активен ещё {self._suppress_until - time.time():.1f}с")
-            return
-        
-        # Получаем текст тезиса В ОБРАТНОМ ПОРЯДКЕ
-        theses = getattr(self.thesis_prompter, "theses", [])
-        if not theses:
-            return
-        
-        if thesis_index is not None:
-            # Озвучиваем конкретный тезис по индексу БЕЗ смены _index
-            if thesis_index < 0 or thesis_index >= len(theses):
-                return
-            # ОБРАТНЫЙ порядок: последний становится первым
-            reversed_index = len(theses) - 1 - thesis_index
-            text = theses[reversed_index]
-        else:
-            # Озвучиваем текущий тезис В ОБРАТНОМ ПОРЯДКЕ
-            current_idx = getattr(self.thesis_prompter, "_index", 0)
-            reversed_index = len(theses) - 1 - current_idx
-            if reversed_index < 0 or reversed_index >= len(theses):
-                return
-            text = theses[reversed_index]
-        
-        if not text:
-            return
-        
-        # Увеличиваем счетчик повторов для этого тезиса
-        if text not in self._thesis_repeat_counts:
-            self._thesis_repeat_counts[text] = 0
-        self._thesis_repeat_counts[text] += 1
-        
-        repeat_num = self._thesis_repeat_counts[text]
-        logger.info(f"📢 Тезис (повтор {repeat_num}/{self._max_thesis_repeats}): {text[:80]}...")
-        
-        # Проверяем, озвучен ли 3-й тезис (считаем уникальные тезисы с хотя бы 1 повтором)
-        announced_unique = sum(1 for count in self._thesis_repeat_counts.values() if count >= 1)
-        if announced_unique == 3 and len(theses) >= 3:
-            logger.info("⚡ Озвучен 3-й тезис - запрашиваем дополнительные")
-            self._request_additional_theses()
-        
-        # Устанавливаем флаг что объявляем тезис
-        self._is_announcing = True
-        try:
-            # Озвучиваем только сам тезис, без дополнительной информации
-            self._speak_text(text)
-            if thesis_index is None:
-                # Помечаем как объявленный только если это текущий тезис
-                self.thesis_prompter.mark_announced()
-            # Убираем озвучивание оставшихся тезисов - это избыточно
-            self._last_announce_ts = time.time()
-        finally:
-            # Сбрасываем флаг после озвучки
-            self._is_announcing = False
 
     def _process_self_segment(self, wav: np.ndarray) -> None:
         if not self.asr_enable:
