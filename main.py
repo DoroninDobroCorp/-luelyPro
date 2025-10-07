@@ -456,29 +456,20 @@ def main() -> None:
             profile_path=selected_profile,
             threshold=0.75,
             vad_aggr=2,
-            min_consec=3,  # Уменьшаем для быстрой реакции
-            flatness_th=0.65,  # Чуть выше для меньшего шума
+            min_consec=3,
+            flatness_th=0.65,
             vad_backend="webrtc",
             silero_vad_threshold=0.5,
             silero_vad_window_ms=100,
-            min_segment_ms=300,  # короче сегмент
-            max_silence_ms=150,  # быстрее завершаем по паузе
-            pre_roll_ms=100,  # Меньше предзахват
+            min_segment_ms=300,
+            max_silence_ms=150,
+            pre_roll_ms=100,
             asr=True,
-            asr_model=os.getenv("ASR_MODEL", "tiny"),  # Меньшая модель для скорости
+            asr_model=os.getenv("ASR_MODEL", "small"),
             asr_lang="ru",
             asr_device=None,
             asr_compute=None,
             llm=llm_enable,
-            theses_path=Path("theses.txt"),
-            thesis_match=0.5,  # Меньше порог для быстрого совпадения
-            thesis_semantic=0.50,  # Меньше порог
-            thesis_semantic_model=None,
-            thesis_semantic_disable=True,  # Отключаем семантику для скорости
-            thesis_gemini_conf=0.50,  # Меньше порог
-            thesis_gemini_disable=True,  # Отключаем Gemini для скорости
-            thesis_autogen_disable=False,
-            thesis_autogen_batch=3,  # Меньше тезисов для скорости
             run_seconds=run_seconds,
         )
         return
@@ -586,15 +577,6 @@ def main() -> None:
             asr_device=args.asr_device,
             asr_compute=args.asr_compute,
             llm=args.llm,
-            theses_path=None if args.no_theses else args.theses,
-            thesis_match=args.thesis_match,
-            thesis_semantic=args.thesis_semantic,
-            thesis_semantic_model=args.thesis_semantic_model,
-            thesis_semantic_disable=args.thesis_semantic_disable,
-            thesis_gemini_conf=args.thesis_gemini_conf,
-            thesis_gemini_disable=args.thesis_gemini_disable,
-            thesis_autogen_disable=args.thesis_autogen_disable,
-            thesis_autogen_batch=args.thesis_autogen_batch,
             run_seconds=args.run_seconds,
         )
     elif args.command == "profiles":

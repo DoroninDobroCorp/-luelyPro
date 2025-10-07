@@ -338,9 +338,9 @@ class LiveVoiceVerifier:
         self._thesis_repeat_stop = threading.Event()
         # Индекс для циклического объявления оставшихся тезисов
         self._thesis_cycle_idx: int = 0
-        # Счетчики повторов для каждого тезиса (макс 4 раза)
+        # Счетчики повторов для каждого тезиса (макс 2 раза)
         self._thesis_repeat_counts: dict[str, int] = {}
-        self._max_thesis_repeats: int = 4
+        self._max_thesis_repeats: int = 2
         # Как часто повторять текущий тезис (секунды), если он ещё не закрыт
         try:
             # Интервал повтора текущего тезиса (сек)
@@ -621,7 +621,9 @@ class LiveVoiceVerifier:
             
             try:
                 if segment.kind == "self":
-                    self._handle_self_segment(segment)
+                    # ОТКЛЮЧЕНО: не распознаем свой голос, только фиксируем
+                    logger.debug("мой голос (игнорируем)")
+                    # self._handle_self_segment(segment)
                 else:
                     self._handle_foreign_segment(segment)
             except Exception as e:  # noqa: BLE001
@@ -941,7 +943,7 @@ class LiveVoiceVerifier:
             )
             
             resp = client.models.generate_content(
-                model="gemini-2.5-flash-lite",
+                model="gemini-flash-lite-latest",
                 contents=[types.Content(role="user", parts=[types.Part.from_text(text=prompt)])],
                 config=cfg,
             )
@@ -993,7 +995,7 @@ class LiveVoiceVerifier:
                     response_mime_type="application/json",
                 )
                 resp = client.models.generate_content(
-                    model="gemini-2.5-flash-lite",
+                    model="gemini-flash-lite-latest",
                     contents=[types.Content(role="user", parts=[types.Part.from_text(text=prompt)])],
                     config=cfg,
                 )
@@ -1514,6 +1516,10 @@ class LiveVoiceVerifier:
         # Если нет текста или TTS не инициализирован — выходим
         if not text or self._tts is None:
             return
+        # ВАЖНО: Если текст пустой или только пробелы - не озвучиваем
+        if not text.strip():
+            logger.debug("Пустой ответ - не озвучиваем")
+            return
         try:
             # Базовая валидация: не озвучиваем JSON-подобные ключи и пустые конструкции
             s = (text or "").strip()
@@ -1757,6 +1763,49 @@ class LiveVoiceVerifier:
             recent = list(self._theses_history)[-self._max_theses_history:]
             self._theses_history = set(recent)
 
+    def _request_additional_theses(self) -> None:
+        """Запрашивает дополнительные тезисы, передавая уже озвученные."""
+        if not self._thesis_generator or not self.thesis_prompter:
+            return
+        
+        qtext = self._question_context.strip()
+        if not qtext:
+            return
+        
+        # Собираем уже озвученные тезисы
+        current_theses = getattr(self.thesis_prompter, "theses", [])
+        announced_theses = "\n".join(f"- {t}" for t in current_theses)
+        
+        # Формируем запрос на дополнительные тезисы
+        extended_prompt = f"{qtext}\n\nУже озвученные факты:\n{announced_theses}\n\nДай ЕЩЕ 3-5 новых фактов, НЕ повторяя уже сказанное."
+        
+        try:
+            candidates = self._thesis_generator.generate(extended_prompt, n=5, language="ru")
+            if candidates:
+                # Фильтруем дубликаты
+                new_items = [c.strip() for c in candidates if c.strip().lower() not in self._theses_history]
+                if new_items:
+                    for item in new_items:
+                        self._theses_history.add(item.strip().lower())
+                    # Добавляем к текущему помощнику
+                    current_theses.extend(new_items)
+                    logger.info(f"➕ Добавлено {len(new_items)} дополнительных тезисов")
+        except Exception as e:
+            logger.exception(f"Ошибка запроса дополнительных тезисов: {e}")
+    
+    def _is_short_specific_question(self, text: str) -> bool:
+        """Определяет, является ли вопрос коротким и конкретным (требует 1 тезис) или развернутым (требует 5 тезисов)."""
+        if not text:
+            return True
+        # Короткие вопросы - обычно < 10 слов и начинаются с вопросительных слов
+        words = text.split()
+        if len(words) <= 10:
+            first_word = words[0].lower()
+            short_question_starts = ["что", "кто", "где", "когда", "сколько", "какой", "какая", "какое"]
+            if any(first_word.startswith(q) for q in short_question_starts):
+                return True
+        return False
+    
     def _maybe_generate_theses(self) -> None:
         if not self._thesis_autogen_enable or self._thesis_generator is None:
             return
@@ -1771,9 +1820,13 @@ class LiveVoiceVerifier:
         qtext = self._question_context.strip()
         if not qtext:
             return
+        
+        # Определяем тип вопроса: короткий четкий (1 тезис) vs развернутый/тема (5 тезисов)
+        is_short_question = self._is_short_specific_question(qtext)
+        n_theses = 1 if is_short_question else 5
+        
         try:
-            # Генерируем меньше тезисов для скорости (2-3 вместо 4)
-            candidates = self._thesis_generator.generate(qtext, n=min(3, self._thesis_autogen_batch), language="ru")
+            candidates = self._thesis_generator.generate(qtext, n=n_theses, language="ru")
         except Exception as e:  # noqa: BLE001
             logger.exception(f"Ошибка автогенерации тезисов: {e}")
             return
@@ -1870,6 +1923,12 @@ class LiveVoiceVerifier:
         
         repeat_num = self._thesis_repeat_counts[text]
         logger.info(f"📢 Тезис (повтор {repeat_num}/{self._max_thesis_repeats}): {text[:80]}...")
+        
+        # Проверяем, озвучен ли 3-й тезис (считаем уникальные тезисы с хотя бы 1 повтором)
+        announced_unique = sum(1 for count in self._thesis_repeat_counts.values() if count >= 1)
+        if announced_unique == 3 and len(theses) >= 3:
+            logger.info("⚡ Озвучен 3-й тезис - запрашиваем дополнительные")
+            self._request_additional_theses()
         
         # Устанавливаем флаг что объявляем тезис
         self._is_announcing = True
@@ -2052,7 +2111,7 @@ class LiveVoiceVerifier:
                 thinking_config=types.ThinkingConfig(thinking_budget=0),
             )
             resp = client.models.generate_content(
-                model="gemini-2.5-flash-lite",
+                model="gemini-flash-lite-latest",
                 contents=[types.Content(role="user", parts=[types.Part.from_text(text=user_text)])],
                 config=cfg,
             )
@@ -2103,7 +2162,7 @@ class LiveVoiceVerifier:
                     response_mime_type="application/json",
                 )
                 resp = client.models.generate_content(
-                    model="gemini-2.5-flash-lite",
+                    model="gemini-flash-lite-latest",
                     contents=[types.Content(role="user", parts=[types.Part.from_text(text=prompt)])],
                     config=cfg,
                 )

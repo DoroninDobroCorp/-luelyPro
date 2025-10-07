@@ -15,8 +15,8 @@ load_dotenv()
 
 @dataclass
 class GeminiJudgeConfig:
-    model_id: str = "gemini-2.5-flash-lite"
-    pro_model_id: str = "gemini-2.5-pro"  # Умная модель для параллельного вызова
+    model_id: str = "gemini-flash-lite-latest"
+    pro_model_id: str = "gemini-flash-lite-latest"  # Используем ту же модель
     pro_thinking_budget: int = 8000  # Thinking budget для Pro (required for thinking mode)
     max_output_tokens: int = 64
     temperature: float = 0.0

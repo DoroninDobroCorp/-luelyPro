@@ -25,6 +25,7 @@ class SileroTTS:
         model_id: str = "v4_ru",
         speaker: str = "eugene",
         sample_rate: int = 24000,
+        speed: float = 1.5,
         device: Optional[str] = None,
     ) -> None:
         if device is None:
@@ -39,6 +40,7 @@ class SileroTTS:
         self.model_id = model_id
         self.speaker = speaker
         self.sample_rate = sample_rate
+        self.speed = speed
         self.device = torch.device(device)
 
         logger.info(

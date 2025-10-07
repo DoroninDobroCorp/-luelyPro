@@ -75,7 +75,7 @@ class AudioConfig:
 @dataclass
 class LLMConfig:
     """Настройки Language Model."""
-    model_id: str = "gemini-2.5-flash"  # Быстрая модель GA (лучше 2.0)
+    model_id: str = "gemini-flash-latest"
     max_tokens: int = 320
     temperature: float = 0.3
     top_p: float = 0.9
