@@ -55,7 +55,6 @@ try:  # Silero VAD (опционально)
     from vad_silero import SileroVAD  # type: ignore
 except Exception:  # noqa: BLE001
     SileroVAD = None  # type: ignore
-from thesis_prompter import ThesisPrompter
 try:
     from thesis_generator import GeminiThesisGenerator  # опционально
 except Exception:  # noqa: BLE001
@@ -310,24 +309,8 @@ class LiveVoiceVerifier:
         # TTS будет отправляться туда, а не проигрываться локально через sounddevice
         self._audio_sink: Optional[Callable[[bytes, int], None]] = None
 
-        # Тезисный помощник
-        self.thesis_prompter: Optional[ThesisPrompter] = None
-        self._thesis_done_notified = False
-        self._last_question: str = ""  # последний вопрос экзаменатора для контекста
-        # Конфигурация для переинициализации помощника
-        self._thesis_match_threshold = float(thesis_match_threshold)
-        self._thesis_semantic_enable = bool(thesis_semantic_enable)
-        self._thesis_semantic_threshold = float(thesis_semantic_threshold)
-        self._thesis_semantic_model = thesis_semantic_model
-        self._thesis_gemini_enable = bool(thesis_gemini_enable)
-        self._thesis_gemini_min_conf = float(thesis_gemini_min_conf)
-        # Автогенерация
-        self._thesis_autogen_enable = bool(thesis_autogen_enable)
-        self._thesis_autogen_batch = max(1, int(thesis_autogen_batch))
+        # Генератор тезисов для подсказок
         self._thesis_generator: Optional[GeminiThesisGenerator] = None
-        self._theses_history: set[str] = set()
-        self._question_context: str = ""
-        self._max_question_context_chars: int = 800  # Уменьшено с 2000 для быстроты
         self._max_theses_history: int = 50  # Лимит для очистки старых тезисов
         self._last_announce_ts: float = 0.0
         self._segment_queue: "queue.Queue[QueuedSegment]" = queue.Queue(maxsize=4)
@@ -1085,26 +1068,11 @@ class LiveVoiceVerifier:
         return out
 
     def _handle_self_transcript(self, transcript: Optional[str]) -> None:
+        """Обработка своей речи - просто логируем и игнорируем."""
         t = (transcript or "").strip()
         if not t:
             return
-        logger.info(f"Моя речь (ASR): {t}")
-        if self.thesis_prompter is None:
-            logger.debug("Тезисный помощник не активен — пропускаю самоанализ")
-            return
-        if self.thesis_prompter.consume_transcript(t, role="студент"):
-            logger.info("Тезис закрыт")
-            if not self.thesis_prompter.has_pending():
-                self._maybe_generate_theses()
-            else:
-                self._announce_thesis()
-            return
-        try:
-            cov = self.thesis_prompter.coverage_of_current()
-            logger.info(f"Прогресс текущего тезиса: {int(cov*100)}%")
-        except Exception:
-            pass
-        self._announce_thesis()
+        logger.info(f"Моя речь (фильтруем): {t}")
 
     def simulate_dialogue(self, events: List[tuple[str, str]]) -> None:
         """Прогоняет последовательность реплик без аудио.
@@ -1118,12 +1086,6 @@ class LiveVoiceVerifier:
                 self._handle_self_transcript(content)
             elif kind in {"other", "interviewer", "question"}:
                 self._handle_foreign_text(content)
-        if (
-            self.thesis_prompter is not None
-            and self.thesis_prompter.has_pending()
-            and self.thesis_prompter.need_announce()
-        ):
-            self._announce_thesis()
 
     # ==== Аудио предобработка: простой highpass + AGC для сегментов ====
     @staticmethod
