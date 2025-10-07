@@ -43,7 +43,6 @@ main.py → live_recognizer.py ─┬─→ asr_transcriber.py (Whisper)
 **Основные функции:**
 - `enroll_cli()` - запись голосового профиля
 - `live_cli()` - запуск live-режима с ассистентом
-- `extract_theses_from_text()` - извлечение тезисов из текста (для тестов)
 - `setup_logging()` - настройка логирования
 
 **Workflow:**
@@ -291,8 +290,6 @@ python main.py profiles delete --all
 - `--llm` - включить генерацию ответов через Gemini
 
 **Тезисы:**
-- `--theses path/to/theses.txt` - файл с тезисами (опционально)
-- `--no-theses` - отключить тезисный помощник
 - `--thesis-match 0..1` - порог совпадения токенов (по умолчанию 0.6)
 - `--thesis-semantic 0..1` - порог семантической близости (по умолчанию 0.55)
 - `--thesis-gemini-conf 0..1` - мин. уверенность Gemini (по умолчанию 0.60)
@@ -390,7 +387,6 @@ CluelyPro/
 ├── tts_silero.py              # TTS (Silero)
 ├── vad_silero.py              # VAD (Silero)
 │
-├── theses.txt                 # Файл с тезисами (опционально)
 ├── requirements.txt           # Python зависимости
 ├── pyproject.toml             # Конфигурация проекта (uv)
 ├── .env.example               # Пример переменных окружения

@@ -280,17 +280,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Включить LLM-ответ (Gemma)",
     )
     p_live.add_argument(
-        "--theses",
-        type=Path,
-        default=Path("theses.txt"),
-        help="Путь к файлу с тезисами (по одному в строке)",
-    )
-    p_live.add_argument(
-        "--no-theses",
-        action="store_true",
-        help="Отключить тезисный помощник",
-    )
-    p_live.add_argument(
         "--thesis-match",
         type=float,
         default=0.6,
@@ -336,26 +325,6 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=4,
         help="Размер пакета автоматически генерируемых тезисов (обычно 3–4)",
-    )
-
-    # Тестовый режим: прогон текстов без аудио
-    p_test = sub.add_parser("test", help="Тест: извлечь тезисы из текста без аудио")
-    p_test.add_argument(
-        "--text",
-        type=str,
-        default=None,
-        help="Текст чужой реплики/диалога для извлечения тезисов",
-    )
-    p_test.add_argument(
-        "--file",
-        type=Path,
-        default=Path("tests/examples.txt"),
-        help="Файл с примерами, по одному кейсу в строке (пустые/начинающиеся с # игнорируются)",
-    )
-    p_test.add_argument(
-        "--json",
-        action="store_true",
-        help="Печатать результаты в JSON-формате",
     )
 
     # Управление профилями: список и удаление
@@ -615,41 +584,6 @@ def main() -> None:
                 print("Укажите --name <имя> или --all для удаления")
         else:
             logger.error("Неизвестная команда управления профилями")
-    elif args.command == "test":
-        from live_recognizer import extract_theses_from_text
-        import json as _json
-
-        cases: list[str] = []
-        if args.text:
-            cases = [args.text]
-        else:
-            f: Path = args.file
-            if f.exists():
-                raw = f.read_text(encoding="utf-8").splitlines()
-                for line in raw:
-                    s = line.strip()
-                    if not s or s.startswith("#"):
-                        continue
-                    cases.append(s)
-            else:
-                print(f"Файл с примерами не найден: {f}")
-                sys.exit(1)
-
-        results: list[dict] = []
-        for idx, sample in enumerate(cases, 1):
-            theses = extract_theses_from_text(sample)
-            item = {"id": idx, "text": sample, "theses": theses}
-            results.append(item)
-            if not args.json:
-                print("== Кейс", idx)
-                print(sample)
-                print("Тезисы:")
-                for i, t in enumerate(theses, 1):
-                    print(f"  {i}) {t}")
-                print()
-
-        if args.json:
-            print(_json.dumps({"results": results}, ensure_ascii=False, indent=2))
     else:
         logger.error("Неизвестная команда")
 

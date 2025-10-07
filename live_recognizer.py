@@ -2178,55 +2178,6 @@ class LiveVoiceVerifier:
             return []
 
 
-def extract_theses_from_text(text: str) -> List[str]:
-    """Публичная функция: извлечь тезисы напрямую из текста чужой реплики/диалога.
-    Возвращает [] если вопросов нет. Использует тот же JSON-контракт Gemini, что и _extract_theses_ai.
-    """
-    t = (text or "").strip()
-    if not t:
-        return []
-    try:
-        import json
-        from google import genai  # type: ignore
-        from google.genai import types  # type: ignore
-        key = os.getenv("GEMINI_API_KEY")
-        if not key:
-            return []
-        client = genai.Client(api_key=key)
-
-        def _call_and_parse(force_json_start: bool = False) -> List[str]:
-            sys_instr = (
-                "Вопрос к кандидату? Верни 2-3 тезиса ответа. Личное/бытовое? Пустой список."
-                " JSON: {\"theses\": [\"...\"]}"
-            )
-            if force_json_start:
-                sys_instr += " Ответ ДОЛЖЕН начинаться с символа { и не содержать ничего кроме JSON."
-            prompt = json.dumps({"transcript": t}, ensure_ascii=False)
-            cfg = types.GenerateContentConfig(
-                system_instruction=sys_instr,
-                max_output_tokens=128,
-                temperature=0.0,
-                top_p=0.8,
-                thinking_config=types.ThinkingConfig(thinking_budget=0),
-                response_mime_type="application/json",
-            )
-            resp = client.models.generate_content(
-                model="gemini-2.0-flash",
-                contents=[types.Content(role="user", parts=[types.Part.from_text(text=prompt)])],
-                config=cfg,
-            )
-            raw = (resp.text or "").strip()
-            return LiveVoiceVerifier._parse_theses_from_raw(raw, n_max=8)
-
-        out = _call_and_parse(False)
-        if not out:
-            out = _call_and_parse(True)
-        return out
-    except Exception as e:  # noqa: BLE001
-        logger.debug(f"extract_theses_from_text failed: {e}")
-        return []
-
-
 def enroll_cli(
     profile_path: Path = Path("voice_profile.npz"),
     seconds: float = 20.0,
@@ -2385,5 +2336,4 @@ __all__ = [
     "VoiceProfile",
     "enroll_cli",
     "live_cli",
-    "extract_theses_from_text",
 ]
