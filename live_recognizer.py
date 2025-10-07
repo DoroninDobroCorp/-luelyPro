@@ -362,30 +362,43 @@ class LiveVoiceVerifier:
 
         # Инициализируем TTS (RU по умолчанию), если он нужен для LLM
         if self.llm_enable:
-            # Проверяем переменную окружения USE_GOOGLE_TTS (по умолчанию false)
-            use_google_tts = os.getenv("USE_GOOGLE_TTS", "false").lower() in ("true", "1", "yes")
+            # Выбор TTS движка через USE_TTS_ENGINE (openai | google | silero)
+            tts_engine = os.getenv("USE_TTS_ENGINE", "silero").lower()
             
-            # Google TTS (ОПЦИОНАЛЬНО - только если явно включен через USE_GOOGLE_TTS=true)
-            if use_google_tts and GoogleTTS is not None and GOOGLE_TTS_AVAILABLE:
+            # OpenAI TTS (РЕКОМЕНДУЕТСЯ: быстро + просто + качественно)
+            if tts_engine == "openai" and OpenAITTS is not None and OPENAI_AVAILABLE:
+                try:
+                    self._tts = OpenAITTS(
+                        model="tts-1",           # tts-1 (быстро) | tts-1-hd (качественно)
+                        voice="onyx",            # onyx (мужской) | nova (женский)
+                        speed=1.0,
+                    )
+                    logger.info("✅ Используется OpenAI TTS (быстрый, качественный)")
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(f"OpenAI TTS недоступен: {e}, переключаюсь на Silero TTS")
+                    self._tts = None
+            
+            # Google TTS (опционально, если настроен Service Account)
+            elif tts_engine == "google" and self._tts is None and GoogleTTS is not None and GOOGLE_TTS_AVAILABLE:
                 try:
                     self._tts = GoogleTTS(
                         language="ru-RU",
                         voice_name="ru-RU-Wavenet-D",  # Мужской, выразительный
                         speaking_rate=1.0,
                     )
-                    logger.info("✅ Используется Google TTS (быстрый, качественный)")
+                    logger.info("✅ Используется Google TTS (очень быстрый)")
                 except Exception as e:  # noqa: BLE001
                     logger.warning(f"Google TTS недоступен: {e}, переключаюсь на Silero TTS")
                     self._tts = None
             
-            # Silero TTS (ПО УМОЛЧАНИЮ - работает из коробки)
+            # Silero TTS (fallback - работает из коробки, офлайн)
             if self._tts is None and SileroTTS is not None:
                 try:
                     self._tts = SileroTTS(
                         language="ru", model_id="v4_ru", speaker="eugene", sample_rate=24000
                     )
-                    if use_google_tts:
-                        logger.info("⚠️ Используется Silero TTS (Google TTS недоступен)")
+                    if tts_engine in ("openai", "google"):
+                        logger.info(f"⚠️ Используется Silero TTS ({tts_engine.upper()} TTS недоступен)")
                     else:
                         logger.info("✅ Используется Silero TTS")
                 except Exception as e:  # noqa: BLE001
