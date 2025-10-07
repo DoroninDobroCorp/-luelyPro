@@ -47,6 +47,16 @@ try:  # LLM (опционально)
     from llm_answer import LLMResponder  # type: ignore
 except Exception:  # noqa: BLE001
     LLMResponder = None  # type: ignore
+try:  # OpenAI TTS (опционально)
+    from tts_openai import OpenAITTS, OPENAI_AVAILABLE  # type: ignore
+except Exception:  # noqa: BLE001
+    OpenAITTS = None  # type: ignore
+    OPENAI_AVAILABLE = False
+try:  # Google TTS (опционально)
+    from tts_google import GoogleTTS, GOOGLE_TTS_AVAILABLE  # type: ignore
+except Exception:  # noqa: BLE001
+    GoogleTTS = None  # type: ignore
+    GOOGLE_TTS_AVAILABLE = False
 try:  # Silero TTS (опционально)
     from tts_silero import SileroTTS  # type: ignore
 except Exception:  # noqa: BLE001

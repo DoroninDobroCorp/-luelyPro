@@ -1,34 +1,14 @@
-2025-10-07 15:46:17.074 | INFO     | live_recognizer:setup_logging:104 - Логи пишутся в /Users/vladimirdoronin/VovkaNowEngineer/CluelyPro/logs/assistant.log
-2025-10-07 15:46:17.149 | INFO     | thesis_generator:__init__:41 - ThesisGenerator инициализирован: model=gemini-flash-lite-latest
-2025-10-07 15:46:17.149 | INFO     | live_recognizer:__init__:344 - Автогенерация тезисов Gemini включена
-2025-10-07 15:46:17.149 | INFO     | live_recognizer:__init__:397 - LiveVoiceVerifier initialized | model=speechbrain/spkrec-ecapa-voxceleb, device=cpu, threshold=0.3, VAD=webrtc
-2025-10-07 15:46:27.675 | INFO     | live_recognizer:enroll_cli:1813 - Для профиля выбран абзац 3 (31 слов)
-2025-10-07 15:46:30.392 | INFO     | live_recognizer:enroll_cli:1829 - Старт записи профиля: целевой лимит 20.0s, минимум озвученной речи 4.0s
-2025-10-07 15:46:30.505 | INFO     | live_recognizer:_collect_enrollment_audio:1072 - Говорите для записи профиля...
-2025-10-07 15:46:45.648 | DEBUG    | live_recognizer:_collect_enrollment_audio:1083 - Останавливаем запись профиля: зафиксирована тишина после речи
-2025-10-07 15:46:45.763 | INFO     | live_recognizer:_collect_enrollment_audio:1109 - Сегмент профиля собран: озвучено 12.92s, кадров 646
-2025-10-07 15:46:46.447 | INFO     | live_recognizer:enroll_cli:1843 - Профиль сохранён: profiles/my_profile.npz
-2025-10-07 15:46:46.490 | INFO     | thesis_generator:__init__:41 - ThesisGenerator инициализирован: model=gemini-flash-lite-latest
-2025-10-07 15:46:46.490 | INFO     | live_recognizer:__init__:344 - Автогенерация тезисов Gemini включена
-2025-10-07 15:46:46.490 | INFO     | asr_transcriber:_init:106 - Loading faster-whisper model=small device=cpu compute_type=int8 lang=ru
-2025-10-07 15:46:47.248 | INFO     | llm_answer:__init__:53 - LLM (Gemini) инициализирован: model=gemini-flash-latest
-2025-10-07 15:46:47.248 | INFO     | tts_silero:__init__:46 - Загрузка Silero TTS: lang=ru, model_id=v4_ru, speaker=eugene, sr=24000, device=cpu
-2025-10-07 15:46:48.229 | INFO     | live_recognizer:__init__:390 - ✅ Используется Silero TTS
-2025-10-07 15:46:48.229 | INFO     | live_recognizer:__init__:397 - LiveVoiceVerifier initialized | model=speechbrain/spkrec-ecapa-voxceleb, device=cpu, threshold=0.75, VAD=webrtc
-2025-10-07 15:47:22.699 | INFO     | live_recognizer:live_verify:1165 - Старт лайв-распознавания. Нажмите Ctrl+C для остановки. Говорите в микрофон.
-2025-10-07 15:47:25.386 | INFO     | live_recognizer:_handle_foreign_text:568 - Чужой голос (ASR: пусто)
-2025-10-07 15:47:29.774 | DEBUG    | live_recognizer:_segment_worker_loop:532 - мой голос (игнорируем)
-2025-10-07 15:47:31.589 | DEBUG    | live_recognizer:_segment_worker_loop:532 - мой голос (игнорируем)
-2025-10-07 15:47:38.759 | INFO     | live_recognizer:_handle_foreign_text:578 - Чужой голос (ASR): Расскажи плючевые события Японии 20 века.
-2025-10-07 15:47:38.759 | DEBUG    | live_recognizer:_handle_foreign_text:590 - Контекст диалога (1 реплик за 30.0с):
-Расскажи плючевые события Японии 20 века.
-2025-10-07 15:47:39.588 | INFO     | live_recognizer:_handle_foreign_text:618 - Сгенерированы тезисы (5): ['Япония проиграла Русско-японскую войну', 'Первая мировая война принесла Японии территориальные приобретения', 'В тысяча девятьсот тридцать первом году Япония вторглась в Маньчжурию', 'Япония капитулировала после атомных бомбардировок в тысяча девятьсот сорок пятом году', 'Послевоенная оккупация длилась семь лет']
-2025-10-07 15:47:39.627 | DEBUG    | live_recognizer:_speak_text:1359 - Наушники - блокировка не нужна
-2025-10-07 15:47:42.022 | DEBUG    | live_recognizer:_speak_text:1359 - Наушники - блокировка не нужна
-2025-10-07 15:47:44.756 | DEBUG    | live_recognizer:_speak_text:1359 - Наушники - блокировка не нужна
-2025-10-07 15:47:48.662 | DEBUG    | live_recognizer:_speak_text:1359 - Наушники - блокировка не нужна
-2025-10-07 15:47:52.780 | DEBUG    | live_recognizer:_speak_text:1359 - Наушники - блокировка не нужна
-2025-10-07 15:47:53.453 | WARNING  | live_recognizer:_enqueue_segment:501 - Очередь сегментов переполнена, отбрасываю other сегмент
-2025-10-07 15:47:57.661 | WARNING  | live_recognizer:_enqueue_segment:501 - Очередь сегментов переполнена, отбрасываю self сегмент
-2025-10-07 15:47:57.759 | DEBUG    | live_recognizer:_speak_text:1359 - Наушники - блокировка не нужна
-2025-10-07 15:47:59.643 | INFO     | live_recognizer:live_verify:1261 - Остановлено пользователем
+2025-10-07 15:56:34.517 | INFO     | live_recognizer:setup_logging:104 - Логи пишутся в /Users/vladimirdoronin/VovkaNowEngineer/CluelyPro/logs/assistant.log
+2025-10-07 15:56:34.594 | INFO     | thesis_generator:__init__:41 - ThesisGenerator инициализирован: model=gemini-flash-lite-latest
+2025-10-07 15:56:34.595 | INFO     | live_recognizer:__init__:344 - Автогенерация тезисов Gemini включена
+2025-10-07 15:56:34.595 | INFO     | live_recognizer:__init__:410 - LiveVoiceVerifier initialized | model=speechbrain/spkrec-ecapa-voxceleb, device=cpu, threshold=0.3, VAD=webrtc
+2025-10-07 15:56:36.367 | INFO     | live_recognizer:enroll_cli:1828 - Для профиля выбран абзац 2 (32 слов)
+2025-10-07 15:56:38.829 | INFO     | live_recognizer:enroll_cli:1844 - Старт записи профиля: целевой лимит 20.0s, минимум озвученной речи 4.0s
+2025-10-07 15:56:38.940 | INFO     | live_recognizer:_collect_enrollment_audio:1085 - Говорите для записи профиля...
+2025-10-07 15:56:54.563 | DEBUG    | live_recognizer:_collect_enrollment_audio:1096 - Останавливаем запись профиля: зафиксирована тишина после речи
+2025-10-07 15:56:54.677 | INFO     | live_recognizer:_collect_enrollment_audio:1122 - Сегмент профиля собран: озвучено 13.04s, кадров 652
+2025-10-07 15:56:55.445 | INFO     | live_recognizer:enroll_cli:1858 - Профиль сохранён: profiles/vv.npz
+2025-10-07 15:56:55.489 | INFO     | thesis_generator:__init__:41 - ThesisGenerator инициализирован: model=gemini-flash-lite-latest
+2025-10-07 15:56:55.489 | INFO     | live_recognizer:__init__:344 - Автогенерация тезисов Gemini включена
+2025-10-07 15:56:55.490 | INFO     | asr_transcriber:_init:106 - Loading faster-whisper model=small device=cpu compute_type=int8 lang=ru
+2025-10-07 15:56:56.270 | INFO     | llm_answer:__init__:53 - LLM (Gemini) инициализирован: model=gemini-flash-latest
