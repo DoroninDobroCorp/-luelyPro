@@ -316,20 +316,6 @@ class LiveVoiceVerifier:
         self._segment_queue: "queue.Queue[QueuedSegment]" = queue.Queue(maxsize=4)
         self._segment_worker: Optional[threading.Thread] = None
         self._segment_stop = threading.Event()
-        # Фоновый повтор тезиса независимо от прихода аудио
-        self._thesis_repeat_worker: Optional[threading.Thread] = None
-        self._thesis_repeat_stop = threading.Event()
-        # Индекс для циклического объявления оставшихся тезисов
-        self._thesis_cycle_idx: int = 0
-        # Счетчики повторов для каждого тезиса (макс 2 раза)
-        self._thesis_repeat_counts: dict[str, int] = {}
-        self._max_thesis_repeats: int = 2
-        # Как часто повторять текущий тезис (секунды), если он ещё не закрыт
-        try:
-            # Интервал повтора текущего тезиса (сек)
-            self._thesis_repeat_sec: float = float(os.getenv("THESIS_REPEAT_SEC", "10"))
-        except Exception:
-            self._thesis_repeat_sec = 10.0
         # Фильтрация «не-вопросов»: heuristic | gemini (по умолчанию gemini)
         self._question_filter_mode: str = os.getenv("QUESTION_FILTER_MODE", "gemini").strip().lower()
         try:
@@ -464,8 +450,6 @@ class LiveVoiceVerifier:
             daemon=True,
         )
         self._segment_worker.start()
-        # Запускаем фонового повторителя тезисов
-        self._start_thesis_repeater()
 
     def _stop_segment_worker(self) -> None:
         self._segment_stop.set()
@@ -478,90 +462,6 @@ class LiveVoiceVerifier:
                 self._segment_queue.task_done()
             except queue.Empty:
                 break
-        # Останавливаем фонового повторителя тезисов
-        self._stop_thesis_repeater()
-
-    def _start_thesis_repeater(self) -> None:
-        if self._thesis_repeat_worker and self._thesis_repeat_worker.is_alive():
-            return
-        self._thesis_repeat_stop.clear()
-        self._thesis_repeat_worker = threading.Thread(
-            target=self._thesis_repeater_loop,
-            name="thesis-repeater",
-            daemon=True,
-        )
-        self._thesis_repeat_worker.start()
-
-    def _stop_thesis_repeater(self) -> None:
-        self._thesis_repeat_stop.set()
-        if self._thesis_repeat_worker is not None:
-            self._thesis_repeat_worker.join(timeout=2.0)
-            self._thesis_repeat_worker = None
-
-    def _thesis_repeater_loop(self) -> None:
-        # Периодическая проверка необходимости повторить тезис, даже в тишине
-        logger.debug(f"🔁 Фоновый поток thesis_repeater запущен (интервал={self._thesis_repeat_sec}с)")
-        while not self._thesis_repeat_stop.is_set():
-            try:
-                time_since_last = time.time() - self._last_announce_ts
-                has_pending = False  # thesis_prompter больше не используется
-                not_suppressed = time.time() >= self._suppress_until
-                not_announcing = not self._is_announcing
-                
-                # Детальное логирование для отладки
-                if has_pending:
-                    logger.debug(
-                        f"🔍 Проверка повтора: time_since_last={time_since_last:.1f}с, "
-                        f"threshold={self._thesis_repeat_sec}с, suppressed={not not_suppressed}, announcing={not not_announcing}"
-                    )
-                
-                if has_pending and time_since_last >= self._thesis_repeat_sec and not_suppressed and not_announcing:
-                    logger.debug(f"✅ Повтор тезиса через {time_since_last:.1f}с (интервал={self._thesis_repeat_sec}с)")
-                    self._announce_next_thesis_in_cycle()
-            except Exception as e:
-                logger.exception(f"❌ Ошибка в thesis_repeater: {e}")
-            # Частота опроса небольшая, чтобы не грузить CPU
-            time.sleep(0.2)
-        logger.debug("🛑 Фоновый поток thesis_repeater остановлен")
-
-    def _announce_next_thesis_in_cycle(self) -> None:
-        # Метод больше не используется (thesis_prompter удален)
-        return
-        # синхронизация индекса цикла с первым незакрытым
-        start_idx = getattr(tp, "_index", 0)
-        total = len(getattr(tp, "theses", []))
-        if self._thesis_cycle_idx < start_idx or self._thesis_cycle_idx >= total:
-            self._thesis_cycle_idx = start_idx
-        
-        # Проверяем счетчик повторов для текущего тезиса
-        theses = getattr(tp, "theses", [])
-        if self._thesis_cycle_idx < len(theses):
-            thesis_text = theses[self._thesis_cycle_idx]
-            repeat_count = self._thesis_repeat_counts.get(thesis_text, 0)
-            
-            if repeat_count >= self._max_thesis_repeats:
-                logger.debug(f"⏭️ Тезис '{thesis_text[:40]}...' уже озвучен {repeat_count} раз (макс {self._max_thesis_repeats}), пропускаем")
-                # Переходим к следующему тезису в цикле
-                self._thesis_cycle_idx += 1
-                if self._thesis_cycle_idx >= total:
-                    self._thesis_cycle_idx = start_idx
-                return
-        
-        # Озвучиваем тезис по циклическому индексу БЕЗ смены _index
-        # Это позволяет озвучивать все накопленные тезисы, но не сбивать текущий
-        tp.reset_announcement()
-        self._announce_thesis(thesis_index=self._thesis_cycle_idx)
-        
-        # вычисляем следующий индекс цикла среди оставшихся
-        total2 = len(getattr(tp, "theses", []))
-        current_idx = getattr(tp, "_index", start_idx)
-        if not tp.has_pending():
-            self._thesis_cycle_idx = 0
-            return
-        # следующий — это следующий незакрытый тезис
-        self._thesis_cycle_idx = self._thesis_cycle_idx + 1
-        if self._thesis_cycle_idx >= total2:
-            self._thesis_cycle_idx = current_idx
 
     def _enqueue_segment(self, kind: str, audio: np.ndarray, distance: float = 0.0) -> None:
         if audio.size == 0:
@@ -744,10 +644,10 @@ class LiveVoiceVerifier:
             True - смена темы, заменить набор
             False - продолжение темы, добавить к существующим
         """
-        if self.thesis_prompter is None or not hasattr(self.thesis_prompter, "theses"):
-            return True  # Нет старых тезисов - создаём новый набор
+        # Упрощенная логика - всегда создаем новый набор тезисов
+        return True
         
-        old_theses = getattr(self.thesis_prompter, "theses", [])
+        old_theses = []
         if not old_theses:
             return True  # Нет старых тезисов - создаём новый набор
         
@@ -1309,20 +1209,6 @@ class LiveVoiceVerifier:
                             else:
                                 self._enqueue_segment("other", wav, dist)
 
-                        # Периодически повторяем текущий тезис, если ещё не закрыт (если нет фонового повторителя)
-                        try:
-                            if (
-                                self.thesis_prompter is not None
-                                and self.thesis_prompter.has_pending()
-                                and (time.time() - self._last_announce_ts) >= self._thesis_repeat_sec
-                                and time.time() >= self._suppress_until
-                                and not (self._thesis_repeat_worker and self._thesis_repeat_worker.is_alive())
-                            ):
-                                self.thesis_prompter.reset_announcement()
-                                self._announce_thesis()
-                        except Exception:
-                            pass
-
         except KeyboardInterrupt:
             logger.info("Остановлено пользователем")
         finally:
@@ -1551,20 +1437,6 @@ class LiveVoiceVerifier:
                             self._enqueue_segment("self", wav, dist)
                         else:
                             self._enqueue_segment("other", wav, dist)
-
-                    # периодический повтор тезиса (если нет фонового повторителя)
-                    try:
-                        if (
-                            self.thesis_prompter is not None
-                            and self.thesis_prompter.has_pending()
-                            and (time.time() - self._last_announce_ts) >= self._thesis_repeat_sec
-                            and time.time() >= self._suppress_until
-                            and not (self._thesis_repeat_worker and self._thesis_repeat_worker.is_alive())
-                        ):
-                            self.thesis_prompter.reset_announcement()
-                            self._announce_thesis()
-                    except Exception:
-                        pass
 
                 # сохраним хвост, если остался неполный кадр
                 if i < n:
