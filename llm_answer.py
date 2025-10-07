@@ -12,6 +12,14 @@ from dotenv import load_dotenv
 from config import LLMConfig as ConfigLLMConfig
 from exceptions import LLMError
 
+# OpenAI fallback (опционально)
+try:
+    from openai import OpenAI
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
+    OpenAI = None  # type: ignore
+
 load_dotenv()
 
 
@@ -29,6 +37,7 @@ class LLMResponder:
         config: Optional[ConfigLLMConfig] = None,
         enable_history: bool = True,
         history_max_turns: int = 8,
+        use_openai_fallback: bool = True,  # Включить OpenAI fallback
     ) -> None:
         # Используем config из config.py
         cfg = config or ConfigLLMConfig()
@@ -39,6 +48,7 @@ class LLMResponder:
         self.enable_history = bool(enable_history)
         self.history_max_turns = int(history_max_turns)
         self.history: List[tuple[str, str]] = []
+        self.use_openai_fallback = use_openai_fallback
 
         # Ключ берём из параметра или окружения
         key = api_key or os.getenv("GEMINI_API_KEY")
@@ -47,12 +57,25 @@ class LLMResponder:
                 "GEMINI_API_KEY не найден. Установите переменную окружения или передайте api_key."
             )
 
-        # Инициализация клиента
+        # Инициализация Gemini клиента
         try:
             self.client = genai.Client(api_key=key)
             logger.info(f"LLM (Gemini) инициализирован: model={self.model_id}")
         except Exception as e:
             raise LLMError(f"Не удалось инициализировать Gemini client: {e}") from e
+        
+        # Инициализация OpenAI fallback (опционально)
+        self.openai_client = None
+        if use_openai_fallback and OPENAI_AVAILABLE:
+            openai_key = os.getenv("OPENAI_API_KEY")
+            if openai_key:
+                try:
+                    self.openai_client = OpenAI(api_key=openai_key)
+                    logger.info("OpenAI fallback включен: model=gpt-4o-mini")
+                except Exception as e:
+                    logger.warning(f"OpenAI fallback недоступен: {e}")
+            else:
+                logger.debug("OPENAI_API_KEY не найден, OpenAI fallback отключен")
 
     def _build_contents(self, user_text: str) -> List[types.Content]:
         contents: List[types.Content] = []
@@ -211,16 +234,66 @@ class LLMResponder:
         except Exception:
             return text
 
+    def _generate_openai(self, user_text: str, intent: str) -> str:
+        """Генерация через OpenAI (fallback)"""
+        if not self.openai_client:
+            return ""
+        
+        try:
+            # Формируем историю для OpenAI
+            messages = []
+            
+            # Системный промпт
+            messages.append({
+                "role": "system",
+                "content": self._SYSTEM_PROMPT
+            })
+            
+            # История диалога
+            if self.enable_history and self.history:
+                for role, text in self.history[-(self.history_max_turns * 2):]:
+                    openai_role = "assistant" if role == "model" else "user"
+                    messages.append({"role": openai_role, "content": text})
+            
+            # Текущий запрос
+            extra, max_toks = self._extra_instruction_for(intent)
+            user_content = user_text.strip()
+            if extra:
+                user_content = f"{extra}\n\n{user_content}"
+            
+            messages.append({"role": "user", "content": user_content})
+            
+            # Вызываем OpenAI API
+            response = self.openai_client.chat.completions.create(
+                model="gpt-4o-mini",  # Самая дешевая и быстрая модель
+                messages=messages,
+                max_tokens=max_toks or self.max_new_tokens,
+                temperature=self.temperature,
+                top_p=self.top_p,
+            )
+            
+            text = response.choices[0].message.content or ""
+            text = text.strip()
+            
+            logger.debug(f"OpenAI fallback вернул {len(text)} символов")
+            return text
+            
+        except Exception as e:
+            logger.error(f"OpenAI fallback ошибка: {e}")
+            return ""
+
     def generate(self, user_text: str) -> str:
         if not user_text or not user_text.strip():
             return ""
 
-        contents = self._build_contents(user_text)
         intent = self._classify_intent(user_text)
-        extra, max_toks = self._extra_instruction_for(intent)
-        config = self._build_config(extra_instruction=extra, max_tokens=max_toks)
-
+        
+        # Сначала пробуем Gemini
         try:
+            contents = self._build_contents(user_text)
+            extra, max_toks = self._extra_instruction_for(intent)
+            config = self._build_config(extra_instruction=extra, max_tokens=max_toks)
+            
             # Стримим текст и аккумулируем
             out: List[str] = []
             for chunk in self.client.models.generate_content_stream(
@@ -267,8 +340,43 @@ class LLMResponder:
                     if len(self.history) > self.history_max_turns * 2:
                         self.history = self.history[-(self.history_max_turns * 2) :]
             return text
+            
         except Exception as e:
-            logger.exception(f"LLM (Gemini) ошибка генерации: {e}")
+            error_str = str(e)
+            
+            # Проверяем что это 503 (перегрузка) или 504 (timeout)
+            is_server_overload = (
+                "503" in error_str or 
+                "504" in error_str or
+                "overloaded" in error_str.lower() or
+                "unavailable" in error_str.lower()
+            )
+            
+            logger.error(f"LLM (Gemini) ошибка: {e}")
+            
+            # Если сервер перегружен И OpenAI fallback доступен - пробуем OpenAI
+            if is_server_overload and self.openai_client:
+                logger.warning("Gemini перегружен (503), переключаемся на OpenAI fallback")
+                text = self._generate_openai(user_text, intent)
+                if text:
+                    # Пост-обработка
+                    text = self._numbers_to_words_ru(text)
+                    if self._has_latin(text):
+                        text2 = self._rewrite_without_latin(text)
+                        if text2:
+                            text = text2
+                    # Обновляем историю
+                    if self.enable_history:
+                        self.history.append(("user", user_text.strip()))
+                        self.history.append(("model", text))
+                        if len(self.history) > self.history_max_turns * 2:
+                            self.history = self.history[-(self.history_max_turns * 2) :]
+                    logger.info("✅ OpenAI fallback успешно вернул ответ")
+                    return text
+                else:
+                    logger.error("OpenAI fallback тоже не сработал")
+            
+            # Если fallback не помог или недоступен - бросаем исключение
             raise LLMError(f"Ошибка генерации ответа: {e}") from e
 
 
