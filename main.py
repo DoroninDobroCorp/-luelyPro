@@ -107,7 +107,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_enroll.add_argument(
         "--asr-model",
         type=str,
-        default=os.getenv("ASR_MODEL", "large-v3-turbo"),
+        default=os.getenv("ASR_MODEL", "small"),
         help="Размер модели faster-whisper: tiny|base|small|medium|large-v3",
     )
     p_enroll.add_argument(

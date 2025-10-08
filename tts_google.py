@@ -46,6 +46,7 @@ class GoogleTTS:
         self.language = language
         self.speaking_rate = speaking_rate
         self.pitch = pitch
+        self.sample_rate = 24000  # Google TTS использует 24kHz
         
         # Лучшие голоса для русского:
         # - ru-RU-Wavenet-A (женский, естественный)

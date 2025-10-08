@@ -52,6 +52,37 @@ if ! python -c "import faster_whisper" 2>/dev/null; then
     echo -e "${GREEN}✓ Зависимости установлены${NC}"
 fi
 
+# Настройка Google TTS (если есть credentials файл)
+GOOGLE_CREDS="cluely-474414-7d78d7856935.json"
+if [ -f "$GOOGLE_CREDS" ]; then
+    export GOOGLE_APPLICATION_CREDENTIALS="$(pwd)/$GOOGLE_CREDS"
+    echo -e "${GREEN}✓ Google TTS credentials настроены${NC}"
+    
+    # Проверка/установка google-cloud-texttospeech
+    if ! python -c "from google.cloud import texttospeech" 2>/dev/null; then
+        echo -e "${YELLOW}⚠️  google-cloud-texttospeech не установлен${NC}"
+        echo -e "${BLUE}Установка google-cloud-texttospeech...${NC}"
+        
+        # Убедимся что pip установлен в venv
+        if ! python -m pip --version &>/dev/null; then
+            echo -e "${BLUE}Установка pip...${NC}"
+            python -m ensurepip --default-pip &>/dev/null || true
+        fi
+        
+        python -m pip install -q google-cloud-texttospeech
+        echo -e "${GREEN}✓ Google TTS установлен${NC}"
+    else
+        echo -e "${GREEN}✓ Google TTS уже установлен${NC}"
+    fi
+    
+    # Использовать Google TTS по умолчанию (если не переопределено)
+    if [ -z "$USE_TTS_ENGINE" ]; then
+        export USE_TTS_ENGINE=google
+    fi
+else
+    echo -e "${YELLOW}⚠️  Google TTS credentials не найдены (используется Silero TTS)${NC}"
+fi
+
 # Создание необходимых папок
 mkdir -p profiles logs
 

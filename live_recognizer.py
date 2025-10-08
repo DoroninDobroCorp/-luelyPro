@@ -220,6 +220,156 @@ class QueuedSegment:
     distance: float = 0.0
 
 
+class ThesisManager:
+    """
+    Менеджер тезисов для управления озвучкой и асинхронным углублением.
+    
+    Логика:
+    - При новом вопросе: генерируются 5 тезисов (или 1 для простого)
+    - Каждый тезис озвучивается 2 раза
+    - После 3-го тезиса (2-е повторение): запрос 5 дополнительных тезисов (параллельно)
+    - Углубление до 7 итераций максимум
+    - При новом вопросе с новыми тезисами: мгновенное прерывание старых
+    """
+    
+    def __init__(
+        self,
+        generator: Optional["GeminiThesisGenerator"],
+        max_depth_iterations: int = 7,
+        deeper_trigger_idx: int = 2,
+    ):
+        self.generator = generator
+        self.max_depth_iterations = max_depth_iterations
+        self.deeper_trigger_idx = deeper_trigger_idx
+        
+        # Текущее состояние
+        self.theses: List[str] = []  # Все тезисы (первые + углубленные)
+        self.current_question: str = ""  # Текущий вопрос
+        self.context: Optional[str] = None  # Контекст диалога
+        self.current_idx: int = 0  # Индекс текущего тезиса (0-based)
+        self.current_repeat: int = 1  # Номер повторения (1 или 2)
+        self.depth_iterations: int = 0  # Счетчик итераций углубления
+        
+        # Асинхронное углубление
+        self.deeper_request_in_progress: bool = False
+        self.deeper_request_thread: Optional[threading.Thread] = None
+        self.pending_deeper_theses: List[str] = []  # Готовые доп.тезисы
+        self.lock = threading.Lock()  # Защита от гонки
+    
+    def start_new_question(
+        self, 
+        question: str, 
+        theses: List[str], 
+        context: Optional[str] = None
+    ) -> None:
+        """Начать новый вопрос (сброс состояния, новые тезисы)"""
+        with self.lock:
+            self.current_question = question
+            self.theses = theses.copy()
+            self.context = context
+            self.current_idx = 0
+            self.current_repeat = 1
+            self.depth_iterations = 0
+            self.deeper_request_in_progress = False
+            self.pending_deeper_theses = []
+            logger.info(f"🎤 Новый вопрос: {len(theses)} тезисов")
+    
+    def get_next_thesis(self) -> Optional[str]:
+        """Получить следующий тезис для озвучки"""
+        with self.lock:
+            if self.current_idx >= len(self.theses):
+                # Проверяем есть ли готовые углубленные тезисы
+                if self.pending_deeper_theses:
+                    self.theses.extend(self.pending_deeper_theses)
+                    self.pending_deeper_theses = []
+                    logger.info(f"📚 Углубление {self.depth_iterations}/{self.max_depth_iterations}: добавлено {len(self.theses) - self.current_idx} доп.тезисов")
+                else:
+                    # Нет тезисов
+                    return None
+            
+            if self.current_idx >= len(self.theses):
+                return None
+            
+            return self.theses[self.current_idx]
+    
+    def advance(self) -> None:
+        """Перейти к следующему повторению/тезису"""
+        with self.lock:
+            if self.current_repeat == 1:
+                self.current_repeat = 2
+            else:
+                self.current_repeat = 1
+                self.current_idx += 1
+    
+    def should_trigger_deeper(self) -> bool:
+        """Проверить нужно ли запустить асинхронное углубление"""
+        with self.lock:
+            # Триггер: 3-й тезис (индекс 2), 2-е повторение
+            return (
+                self.current_idx == self.deeper_trigger_idx and
+                self.current_repeat == 2 and
+                self.depth_iterations < self.max_depth_iterations and
+                not self.deeper_request_in_progress and
+                self.generator is not None
+            )
+    
+    def trigger_deeper_async(self) -> None:
+        """Запустить асинхронный запрос углубления"""
+        if not self.should_trigger_deeper():
+            return
+        
+        with self.lock:
+            self.deeper_request_in_progress = True
+            self.depth_iterations += 1
+        
+        # Запускаем запрос в отдельном потоке
+        def request_deeper():
+            try:
+                all_theses = self.theses.copy()
+                question = self.current_question
+                context = self.context
+                
+                logger.debug(f"📚 Углубление {self.depth_iterations}/{self.max_depth_iterations}: запрос 5 доп.тезисов...")
+                
+                deeper_theses = self.generator.generate_deeper(
+                    previous_theses=all_theses,
+                    question=question,
+                    context=context,
+                    n=5,
+                    language="ru"
+                )
+                
+                if deeper_theses:
+                    with self.lock:
+                        self.pending_deeper_theses = deeper_theses
+                        logger.info(f"✅ Углубление {self.depth_iterations}: получено {len(deeper_theses)} доп.тезисов")
+                        logger.info(f"Углубленные тезисы ({len(deeper_theses)}): {deeper_theses}")
+                else:
+                    logger.warning(f"⚠️ Углубление {self.depth_iterations}: пустой результат")
+                    
+            except Exception as e:
+                logger.error(f"Ошибка асинхронного углубления: {e}")
+            finally:
+                with self.lock:
+                    self.deeper_request_in_progress = False
+        
+        self.deeper_request_thread = threading.Thread(
+            target=request_deeper,
+            name=f"deeper-{self.depth_iterations}",
+            daemon=True
+        )
+        self.deeper_request_thread.start()
+    
+    def has_more_theses(self) -> bool:
+        """Проверить есть ли еще тезисы или ожидаются углубленные"""
+        with self.lock:
+            return (
+                self.current_idx < len(self.theses) or
+                len(self.pending_deeper_theses) > 0 or
+                self.deeper_request_in_progress
+            )
+
+
 class LiveVoiceVerifier:
     """
     Минимальный лайв-модуль:
@@ -315,6 +465,11 @@ class LiveVoiceVerifier:
         self._tts: Optional[SileroTTS] = None
         self._suppress_until: float = 0.0  # подавляем обработку входа на время TTS
         self._is_announcing: bool = False  # флаг что сейчас озвучивается тезис
+        self._tts_interrupt: threading.Event = threading.Event()  # флаг прерывания TTS
+        self._tts_lock: threading.Lock = threading.Lock()  # защита от одновременного воспроизведения
+        self._stop_requested: threading.Event = threading.Event()  # глобальный флаг остановки
+        self._thesis_thread: Optional[threading.Thread] = None  # текущий поток озвучки тезисов
+        self._tts_generation: int = 0  # счетчик поколений озвучки (для прерывания старых потоков)
         # Внешний получатель аудио (например, WebSocket-клиент). При наличии —
         # TTS будет отправляться туда, а не проигрываться локально через sounddevice
         self._audio_sink: Optional[Callable[[bytes, int], None]] = None
@@ -326,9 +481,11 @@ class LiveVoiceVerifier:
         # Контекст диалога за последние 30 секунд (для местоимений)
         self._dialogue_context: list[tuple[float, str]] = []  # [(timestamp, text), ...]
         self._context_window_sec: float = 30.0  # Окно контекста в секундах
-        self._segment_queue: "queue.Queue[QueuedSegment]" = queue.Queue(maxsize=4)
-        self._segment_worker: Optional[threading.Thread] = None
+        # Увеличенная очередь для буферизации во время озвучки тезисов (5 тезисов × 2 повтора + запас)
+        self._segment_queue: "queue.Queue[QueuedSegment]" = queue.Queue(maxsize=20)
+        self._segment_workers: List[threading.Thread] = []  # Список воркеров для параллельной обработки
         self._segment_stop = threading.Event()
+        self._num_asr_workers: int = int(os.getenv("ASR_WORKERS", "2"))  # Количество параллельных воркеров
         # Фильтрация «не-вопросов»: heuristic | gemini (по умолчанию gemini)
         self._question_filter_mode: str = os.getenv("QUESTION_FILTER_MODE", "gemini").strip().lower()
         try:
@@ -356,6 +513,16 @@ class LiveVoiceVerifier:
                 logger.exception(f"Не удалось инициализировать ThesisGenerator: {e}")
         else:
             logger.warning("Генератор тезисов недоступен: нет зависимости thesis_generator/google-genai")
+        
+        # Инициализация менеджера тезисов
+        from config import ThesisConfig
+        thesis_cfg = ThesisConfig()
+        self._thesis_manager = ThesisManager(
+            generator=self._thesis_generator,
+            max_depth_iterations=thesis_cfg.max_depth_iterations,
+            deeper_trigger_idx=thesis_cfg.deeper_trigger_idx,
+        )
+        logger.info(f"ThesisManager инициализирован: макс углубление={thesis_cfg.max_depth_iterations}")
 
         if self.asr_enable:
             try:
@@ -375,15 +542,23 @@ class LiveVoiceVerifier:
             # Выбор TTS движка через USE_TTS_ENGINE (openai | google | silero)
             tts_engine = os.getenv("USE_TTS_ENGINE", "silero").lower()
             
+            # Скорость воспроизведения (0.25-4.0, 1.0 = нормальная)
+            # 1.3-1.5 оптимально для тезисов - быстро, но разборчиво
+            try:
+                tts_speed = float(os.getenv("TTS_SPEED", "1.35"))
+                tts_speed = max(0.25, min(4.0, tts_speed))  # Ограничиваем диапазон
+            except ValueError:
+                tts_speed = 1.35
+            
             # OpenAI TTS (РЕКОМЕНДУЕТСЯ: быстро + просто + качественно)
             if tts_engine == "openai" and OpenAITTS is not None and OPENAI_AVAILABLE:
                 try:
                     self._tts = OpenAITTS(
                         model="tts-1",           # tts-1 (быстро) | tts-1-hd (качественно)
                         voice="onyx",            # onyx (мужской) | nova (женский)
-                        speed=1.0,
+                        speed=tts_speed,
                     )
-                    logger.info("✅ Используется OpenAI TTS (быстрый, качественный)")
+                    logger.info(f"✅ Используется OpenAI TTS (скорость {tts_speed}x)")
                 except Exception as e:  # noqa: BLE001
                     logger.warning(f"OpenAI TTS недоступен: {e}, переключаюсь на Silero TTS")
                     self._tts = None
@@ -394,9 +569,9 @@ class LiveVoiceVerifier:
                     self._tts = GoogleTTS(
                         language="ru-RU",
                         voice_name="ru-RU-Wavenet-D",  # Мужской, выразительный
-                        speaking_rate=1.0,
+                        speaking_rate=tts_speed,  # Ускоренное воспроизведение без повышения тона
                     )
-                    logger.info("✅ Используется Google TTS (очень быстрый)")
+                    logger.info(f"✅ Используется Google TTS (скорость {tts_speed}x)")
                 except Exception as e:  # noqa: BLE001
                     logger.warning(f"Google TTS недоступен: {e}, переключаюсь на Silero TTS")
                     self._tts = None
@@ -489,21 +664,47 @@ class LiveVoiceVerifier:
 
     # ==== Асинхронная обработка сегментов ====
     def _start_segment_worker(self) -> None:
-        if self._segment_worker and self._segment_worker.is_alive():
+        # Проверяем есть ли уже живые воркеры
+        if any(w.is_alive() for w in self._segment_workers):
             return
+        
         self._segment_stop.clear()
-        self._segment_worker = threading.Thread(
-            target=self._segment_worker_loop,
-            name="segment-worker",
-            daemon=True,
-        )
-        self._segment_worker.start()
+        self._segment_workers = []
+        
+        # Запускаем N параллельных воркеров
+        for i in range(self._num_asr_workers):
+            worker = threading.Thread(
+                target=self._segment_worker_loop,
+                name=f"segment-worker-{i}",
+                daemon=True,
+            )
+            worker.start()
+            self._segment_workers.append(worker)
+        
+        logger.info(f"🚀 Запущено {self._num_asr_workers} параллельных ASR воркеров")
 
     def _stop_segment_worker(self) -> None:
         self._segment_stop.set()
-        if self._segment_worker is not None:
-            self._segment_worker.join(timeout=2.0)
-            self._segment_worker = None
+        self._stop_requested.set()  # Устанавливаем глобальный флаг остановки
+        
+        # Прерываем TTS и останавливаем sounddevice
+        self._tts_interrupt.set()
+        if sd is not None:
+            try:
+                sd.stop()
+            except Exception:
+                pass
+        
+        # Останавливаем все воркеры
+        for worker in self._segment_workers:
+            if worker is not None:
+                worker.join(timeout=2.0)
+                if worker.is_alive():
+                    logger.warning(f"Worker {worker.name} не остановился за 2с")
+        
+        self._segment_workers = []
+        
+        # Очищаем очередь
         while not self._segment_queue.empty():
             try:
                 self._segment_queue.get_nowait()
@@ -532,22 +733,34 @@ class LiveVoiceVerifier:
                 logger.error("Не удалось добавить сегмент в очередь — пропускаю сигнал")
 
     def _segment_worker_loop(self) -> None:
-        while not self._segment_stop.is_set() or not self._segment_queue.empty():
+        # Создаём локальный экземпляр ASR для этого воркера (thread-safe)
+        local_asr: Optional[FasterWhisperTranscriber] = None
+        if self.asr_enable and FasterWhisperTranscriber is not None:
+            try:
+                local_asr = FasterWhisperTranscriber(
+                    model_size=self.asr_model_size,
+                    device=self.asr_device,
+                    compute_type=self.asr_compute_type,
+                    language=self.asr_language,
+                )
+                worker_name = threading.current_thread().name
+                logger.info(f"✓ {worker_name}: локальный ASR инициализирован")
+            except Exception as e:
+                logger.warning(f"Не удалось создать локальный ASR: {e}")
+        
+        while not self._segment_stop.is_set() and not self._stop_requested.is_set():
             try:
                 segment = self._segment_queue.get(timeout=0.2)
             except queue.Empty:
                 continue
             
-            # ВАЖНО: Во время озвучки тезиса игнорируем только СВОИ сегменты
-            # (чтобы не закрыть тезис который сейчас озвучивается)
-            # Но продолжаем слушать ЧУЖИЕ сегменты (новые вопросы)
-            if self._is_announcing:
-                if segment.kind == "self":
-                    logger.debug("⏸️ Игнорируем свой голос во время озвучки тезиса")
-                    self._segment_queue.task_done()
-                    continue
-                else:
-                    logger.debug(f"✅ Обрабатываем чужой сегмент даже во время озвучки")
+            # ВАЖНО: Во время озвучки тезисов игнорируем СВОИ сегменты
+            # (чтобы не распознавать собственное повторение тезисов)
+            # ЧУЖИЕ сегменты обрабатываем (это могут быть новые вопросы или продолжение диалога)
+            if self._is_announcing and segment.kind == "self":
+                logger.debug("⏸️ Игнорируем свой голос во время озвучки тезисов")
+                self._segment_queue.task_done()
+                continue
             
             try:
                 if segment.kind == "self":
@@ -555,7 +768,7 @@ class LiveVoiceVerifier:
                     logger.debug("мой голос (игнорируем)")
                     # self._handle_self_segment(segment)
                 else:
-                    self._handle_foreign_segment(segment)
+                    self._handle_foreign_segment_with_asr(segment, local_asr)
             except Exception as e:  # noqa: BLE001
                 logger.exception(f"Ошибка обработки сегмента: {e}")
             finally:
@@ -573,10 +786,36 @@ class LiveVoiceVerifier:
             return
         self._handle_self_transcript(transcript)
 
+    def _handle_foreign_segment_with_asr(self, segment: QueuedSegment, local_asr: Optional[FasterWhisperTranscriber]) -> None:
+        """Обработка чужого сегмента с локальным ASR (для параллельных воркеров)"""
+        segment_duration = segment.audio.size / SAMPLE_RATE
+        logger.debug(f"📏 Длина сегмента: {segment_duration:.2f}с")
+        
+        if self.asr_enable and local_asr is not None:
+            try:
+                asr_start = time.time()
+                text = local_asr.transcribe_np(segment.audio, SAMPLE_RATE)
+                asr_elapsed = (time.time() - asr_start) * 1000
+                worker_name = threading.current_thread().name
+                logger.debug(f"⏱️  [{worker_name}] ASR обработка: {asr_elapsed:.0f}мс (аудио {segment_duration:.2f}с)")
+            except Exception as e:  # noqa: BLE001
+                logger.exception(f"ASR ошибка: {e}")
+                return
+            self._handle_foreign_text(text)
+        else:
+            logger.info("незнакомый голос")
+    
     def _handle_foreign_segment(self, segment: QueuedSegment) -> None:
+        """Legacy метод для обратной совместимости - использует глобальный ASR"""
+        segment_duration = segment.audio.size / SAMPLE_RATE
+        logger.debug(f"📏 Длина сегмента: {segment_duration:.2f}с")
+        
         if self.asr_enable:
             try:
+                asr_start = time.time()
                 text = self._ensure_asr().transcribe_np(segment.audio, SAMPLE_RATE)
+                asr_elapsed = (time.time() - asr_start) * 1000
+                logger.debug(f"⏱️  ASR обработка: {asr_elapsed:.0f}мс (аудио {segment_duration:.2f}с)")
             except Exception as e:  # noqa: BLE001
                 logger.exception(f"ASR ошибка: {e}")
                 return
@@ -586,17 +825,15 @@ class LiveVoiceVerifier:
 
     def _handle_foreign_text(self, text: Optional[str]) -> None:
         """Обработка чужого голоса: ASR → генерация тезисов → LLM ответ → TTS"""
+        processing_start = time.time()
         t = (text or "").strip()
         if not t:
             logger.info("Чужой голос (ASR: пусто)")
             return
         
-        # Проверяем не слишком ли рано после TTS (может быть эхо)
-        # Но ТОЛЬКО если НЕ используем наушники
-        if not self._use_headphones and time.time() < self._suppress_until:
-            time_left = self._suppress_until - time.time()
-            logger.debug(f"Игнорирую вход (suppress ещё {time_left:.1f}с): {t}")
-            return
+        # НЕ блокируем обработку чужих вопросов - они ВСЕГДА должны обрабатываться
+        # Защита от самоподхвата происходит на уровне VAD (в основном цикле live_verify)
+        # и через флаг _is_announcing (в segment_worker_loop)
         
         logger.info(f"Чужой голос (ASR): {t}")
         
@@ -608,9 +845,18 @@ class LiveVoiceVerifier:
         cutoff_time = now - self._context_window_sec
         self._dialogue_context = [(ts, txt) for ts, txt in self._dialogue_context if ts >= cutoff_time]
         
-        # Формируем строку контекста для передачи в thesis_generator
-        context_text = "\n".join([txt for _, txt in self._dialogue_context])
-        logger.debug(f"Контекст диалога ({len(self._dialogue_context)} реплик за {self._context_window_sec}с):\n{context_text}")
+        # Формируем контекст (предыдущие реплики) и текущий вопрос ОТДЕЛЬНО
+        if len(self._dialogue_context) > 1:
+            # Есть предыдущие реплики - передаём их как контекст
+            context_items = [txt for _, txt in self._dialogue_context[:-1]]
+            context_text = "\n".join(context_items)
+            current_question = t
+        else:
+            # Первый вопрос - контекста нет
+            context_text = None
+            current_question = t
+        
+        logger.debug(f"Контекст: {len(self._dialogue_context)-1} реплик, текущий вопрос: {current_question}")
         
         # Генерируем тезисы через thesis_generator (формат: "тезис1 ||| тезис2 ||| тезис3")
         if self._thesis_generator is None and GeminiThesisGenerator is not None:
@@ -621,8 +867,16 @@ class LiveVoiceVerifier:
         
         if self._thesis_generator:
             try:
-                # Передаем весь контекст для понимания местоимений
-                theses_raw = self._thesis_generator.generate(context_text, n=5, language="ru")
+                # Передаём текущий вопрос И контекст отдельно
+                gemini_start = time.time()
+                theses_raw = self._thesis_generator.generate(
+                    current_question, 
+                    n=5, 
+                    language="ru",
+                    context=context_text
+                )
+                gemini_elapsed = (time.time() - gemini_start) * 1000
+                logger.debug(f"⏱️  Gemini API: {gemini_elapsed:.0f}мс")
                 
                 # Парсим тезисы - ожидаем список строк или одну строку с |||
                 theses = []
@@ -640,195 +894,115 @@ class LiveVoiceVerifier:
                 if theses:
                     logger.info(f"Сгенерированы тезисы ({len(theses)}): {theses}")
                     
-                    # Озвучиваем каждый тезис 2 РАЗА (с паузой)
-                    for i, thesis in enumerate(theses, 1):
-                        text_to_speak = f"{i}. {thesis}"
-                        # Первый раз
-                        self._speak_text(text_to_speak)
-                        time.sleep(0.3)
-                        # Второй раз
-                        self._speak_text(text_to_speak)
-                        time.sleep(0.5)  # Пауза перед следующим тезисом
+                    # Инициализируем ThesisManager новым вопросом
+                    self._thesis_manager.start_new_question(
+                        question=current_question,
+                        theses=theses,
+                        context=context_text
+                    )
+                    
+                    # Прерываем предыдущую озвучку (новый вопрос с новыми тезисами) - мгновенно!
+                    if self._is_announcing:
+                        logger.info("🚨 Новый вопрос с новыми тезисами - прерываем старые тезисы")
+                        
+                        # Увеличиваем счетчик поколений - старый поток увидит что устарел
+                        self._tts_generation += 1
+                        
+                        # Устанавливаем флаг прерывания для немедленной остановки
+                        self._tts_interrupt.set()
+                        
+                        # Принудительно останавливаем воспроизведение (прерываем sd.wait())
+                        if sd is not None:
+                            try:
+                                sd.stop()
+                                logger.debug("sd.stop() вызван для прерывания озвучки")
+                            except Exception as e:
+                                logger.debug(f"sd.stop() ошибка: {e}")
+                        
+                        # Даем время старому потоку остановиться
+                        if self._thesis_thread is not None and self._thesis_thread.is_alive():
+                            logger.debug("Ждём завершения старого потока озвучки...")
+                            self._thesis_thread.join(timeout=0.5)
+                            
+                            if self._thesis_thread.is_alive():
+                                logger.warning("⚠️ Старый поток еще работает, но запускаем новый (версионность)")
+                    
+                    # Всегда очищаем флаг для нового потока
+                    self._tts_interrupt.clear()
+                    
+                    # Запоминаем текущее поколение для нового потока
+                    current_generation = self._tts_generation
+                    
+                    # Логируем общее время обработки
+                    total_elapsed = (time.time() - processing_start) * 1000
+                    logger.info(f"⏱️  ИТОГО обработка вопроса: {total_elapsed:.0f}мс")
+                    
+                    # Озвучиваем тезисы в отдельном потоке чтобы не блокировать прием новых вопросов
+                    def announce_theses():
+                        my_generation = current_generation  # Запоминаем свое поколение
+                        self._is_announcing = True
+                        logger.debug(f"🎤 Начинаю озвучку тезисов (поколение {my_generation})")
+                        try:
+                            # Озвучиваем тезисы через ThesisManager
+                            while self._thesis_manager.has_more_theses():
+                                # Проверяем прерывание (новый вопрос с новыми тезисами)
+                                if self._tts_generation > my_generation or self._tts_interrupt.is_set() or self._stop_requested.is_set():
+                                    logger.info(f"⚠️ Озвучка тезисов прервана (gen {my_generation} -> {self._tts_generation})")
+                                    break
+                                
+                                # Получаем текущий тезис
+                                thesis = self._thesis_manager.get_next_thesis()
+                                if not thesis:
+                                    # Нет готовых тезисов, ждем углубленных
+                                    time.sleep(0.1)
+                                    continue
+                                
+                                # Получаем номера для логирования
+                                with self._thesis_manager.lock:
+                                    idx = self._thesis_manager.current_idx + 1
+                                    repeat = self._thesis_manager.current_repeat
+                                    total = len(self._thesis_manager.theses)
+                                
+                                logger.debug(f"🔊 Тезис {idx}/{total} ({repeat}/2): {thesis[:50]}...")
+                                
+                                # Озвучиваем тезис
+                                self._speak_text(thesis, generation=my_generation)
+                                
+                                # Проверяем прерывание после озвучки
+                                if self._tts_generation > my_generation or self._tts_interrupt.is_set() or self._stop_requested.is_set():
+                                    logger.info(f"⚠️ Прервано после озвучки тезиса {idx} ({repeat}/2)")
+                                    break
+                                
+                                # Триггер углубления (после 3-го тезиса, 2-е повторение)
+                                if self._thesis_manager.should_trigger_deeper():
+                                    logger.info(f"🚀 Триггер углубления после тезиса {idx} (repeat {repeat})")
+                                    self._thesis_manager.trigger_deeper_async()
+                                
+                                # Переходим к следующему повторению/тезису
+                                self._thesis_manager.advance()
+                                
+                                # Паузы между повторениями и тезисами
+                                with self._thesis_manager.lock:
+                                    next_repeat = self._thesis_manager.current_repeat
+                                if next_repeat == 1:
+                                    # Перешли к новому тезису - пауза длиннее
+                                    time.sleep(0.3)
+                                else:
+                                    # Между повторениями - пауза короче
+                                    time.sleep(0.15)
+                            
+                            if self._tts_generation == my_generation and not (self._tts_interrupt.is_set() or self._stop_requested.is_set()):
+                                logger.debug(f"✅ Озвучка всех тезисов завершена (gen {my_generation})")
+                        finally:
+                            self._is_announcing = False
+                            logger.debug(f"🎤 Озвучка тезисов остановлена (gen {my_generation})")
+                    
+                    self._thesis_thread = threading.Thread(target=announce_theses, name="thesis-announcer", daemon=True)
+                    self._thesis_thread.start()
                 else:
                     logger.warning("Тезисы не сгенерированы (пустой результат)")
             except Exception as e:
                 logger.error(f"Ошибка генерации тезисов: {e}")
-
-    @staticmethod
-    def _answer_math_if_any(text: str) -> Optional[str]:
-        """Распознаёт простые математические фразы и строит ответ.
-        Сейчас поддерживается шаблон: "<int> в степени <int>".
-        Возвращает готовую фразу вида: "<результат> будет <основание> в степени <показатель>".
-        """
-        if not text:
-            return None
-        import re
-        t = text.strip().lower()
-        # Наиболее частотный и однозначный паттерн: цифры + "в степени" + цифры
-        m = re.search(r"\b(\d{1,9})\s+в\s+степен[еи]\s+(\d{1,3})\b", t)
-        if not m:
-            return None
-        try:
-            base = int(m.group(1))
-            exp = int(m.group(2))
-        except Exception:
-            return None
-        # Защита от чрезмерно больших расчётов
-        if exp > 1000:
-            return None
-        try:
-            res = pow(base, exp)
-        except Exception:
-            return None
-        # Сформируем человекочитаемую фразу: сначала ответ, затем пояснение
-        base_w = None
-        exp_w = None
-        try:
-            from num2words import num2words  # type: ignore
-            base_w = num2words(base, lang="ru")
-            exp_w = num2words(exp, lang="ru")
-        except Exception:
-            pass
-        base_part = base_w if base_w else str(base)
-        exp_part = exp_w if exp_w else str(exp)
-        # Если число слишком длинное, не озвучиваем все цифры
-        res_s = str(res)
-        if len(res_s) > 30:
-            # Дадим компактную оценку в научной форме
-            try:
-                import math as _math
-                # mantissa * 10^k
-                k = len(res_s) - 1
-                mantissa = float(res_s[0] + "." + res_s[1: min(6, len(res_s))])
-                approx = f"примерно {mantissa:.3f} на десять в степени {k}"
-                return f"{approx}. {base_part} в степени {exp_part}."
-            except Exception:
-                return f"Число очень большое. {base_part} в степени {exp_part}."
-        return f"{res_s} будет {base_part} в степени {exp_part}."
-
-    def _should_replace_thesis_set(self, new_question: str, new_thesis: str) -> bool:
-        """
-        Проверяет через Gemini: нужно ли заменить набор тезисов на новый,
-        или новый тезис относится к той же теме (продолжение разговора).
-        
-        Returns:
-            True - смена темы, заменить набор
-            False - продолжение темы, добавить к существующим
-        """
-        # Упрощенная логика - всегда создаем новый набор тезисов
-        return True
-        
-        old_theses = []
-        if not old_theses:
-            return True  # Нет старых тезисов - создаём новый набор
-        
-        try:
-            import json
-            from google import genai  # type: ignore
-            from google.genai import types  # type: ignore
-            key = os.getenv("GEMINI_API_KEY")
-            if not key:
-                return True  # Нет ключа - по умолчанию заменяем
-            
-            client = genai.Client(api_key=key)
-            
-            # Промпт для Gemini
-            old_theses_text = "\n".join([f"- {t}" for t in old_theses])
-            prompt = f"""Анализ связности вопросов:
-
-ТЕКУЩИЕ ТЕЗИСЫ:
-{old_theses_text}
-
-НОВЫЙ ВОПРОС:
-{new_question}
-
-НОВЫЙ ТЕЗИС:
-{new_thesis}
-
-Определи: новый вопрос тематически связан с текущими тезисами (например, оба про космонавтов, историю, географию и т.д.) или это совершенно другая тема?
-
-ВАЖНО: Вопросы "Первый человек в космосе" и "Первая женщина в космосе" - это ОДНА тема (космонавтика), поэтому decision="continue".
-
-Ответь JSON:
-{{"decision": "continue"}}  - если тематически связаны (добавить тезис к существующим)
-{{"decision": "replace"}}   - если совершенно разные темы (заменить набор)
-"""
-            
-            cfg = types.GenerateContentConfig(
-                system_instruction="Ты - анализатор контекста. Определяй смену темы разговора.",
-                max_output_tokens=50,
-                temperature=0.1,
-                response_mime_type="application/json",
-                thinking_config=types.ThinkingConfig(thinking_budget=0),
-            )
-            
-            resp = client.models.generate_content(
-                model="gemini-flash-lite-latest",
-                contents=[types.Content(role="user", parts=[types.Part.from_text(text=prompt)])],
-                config=cfg,
-            )
-            
-            result = json.loads(resp.text)
-            decision = result.get("decision", "replace")
-            
-            should_replace = (decision == "replace")
-            logger.debug(f"🤖 Gemini решение: {decision} ({'ЗАМЕНИТЬ' if should_replace else 'ДОБАВИТЬ'})")
-            return should_replace
-            
-        except Exception as e:
-            logger.debug(f"Ошибка проверки актуальности тезисов: {e}")
-            # При ошибке по умолчанию заменяем (безопасное поведение)
-            return True
-
-    def _extract_commentary_facts(self, text: str) -> List[str]:
-        """Возвращает список коротких факт-заметок по теме реплики собеседника.
-        Даже если нет явного вопроса. Использует контракт JSON через _parse_theses_from_raw.
-        """
-        t = (text or "").strip()
-        if not t:
-            return []
-        try:
-            import json
-            from google import genai  # type: ignore
-            from google.genai import types  # type: ignore
-            key = os.getenv("GEMINI_API_KEY")
-            if not key:
-                return []
-            client = genai.Client(api_key=key)
-
-            def _call_and_parse(force_json_start: bool = False) -> List[str]:
-                sys_instr = (
-                    "Ты — ассистент-комментатор. Слушай короткие реплики собеседника и формируй"
-                    " 2–3 интересных, уместных факт-заметки по теме (история, контекст, определения, цифры)."
-                    " Если тема личная/бытовая и не подходит — верни пустой список."
-                    " Формат ответа строго JSON: {\"theses\": [\"...\"]}."
-                )
-                if force_json_start:
-                    sys_instr += " Ответ ДОЛЖЕН начинаться с символа { и не содержать ничего кроме JSON."
-                prompt = json.dumps({"transcript": t}, ensure_ascii=False)
-                cfg = types.GenerateContentConfig(
-                    system_instruction=sys_instr,
-                    max_output_tokens=96,
-                    temperature=0.2,
-                    top_p=0.9,
-                    thinking_config=types.ThinkingConfig(thinking_budget=0),
-                    response_mime_type="application/json",
-                )
-                resp = client.models.generate_content(
-                    model="gemini-flash-lite-latest",
-                    contents=[types.Content(role="user", parts=[types.Part.from_text(text=prompt)])],
-                    config=cfg,
-                )
-                raw = (resp.text or "").strip()
-                return LiveVoiceVerifier._parse_theses_from_raw(raw, n_max=3)
-
-            out = _call_and_parse(False)
-            if not out:
-                out = _call_and_parse(True)
-            return out
-        except Exception as e:  # noqa: BLE001
-            logger.debug(f"Commentary extraction failed: {e}")
-            return []
 
     @staticmethod
     def _should_ignore_non_question_text(text: str) -> bool:
@@ -849,60 +1023,6 @@ class LiveVoiceVerifier:
             except Exception:
                 continue
         return False
-
-    @staticmethod
-    def _enforce_answer_then_question(text: str) -> str:
-        """Удаляет вопросительные предложения из ответа, оставляя только факт-ответ.
-        Разделяет по предложениям, сохраняет порядок внутри группы утверждений.
-        Если утвердительных предложений не найдено — возвращает исходный текст.
-        """
-        if not text:
-            return text
-        import re
-        s = text.strip()
-        s = re.sub(r"\s+", " ", s)
-        parts = re.split(r"([\.!?]+\s+)", s)
-        sentences: list[str] = []
-        for i in range(0, len(parts), 2):
-            chunk = parts[i].strip()
-            sep = parts[i + 1] if i + 1 < len(parts) else ""
-            sent = (chunk + (sep or "")).strip()
-            if sent:
-                sentences.append(sent)
-        if not sentences:
-            return s
-
-        def _is_question_like(t: str) -> bool:
-            if not t:
-                return False
-            t2 = t.strip().lower()
-            if t2.endswith("?"):
-                return True
-            # Частые русские вопросительные конструкции даже без знака вопроса
-            patterns = [
-                r"^кто\b", r"^что\b", r"^когда\b", r"^где\b", r"^почему\b", r"^зачем\b",
-                r"^как\b", r"^какой\b", r"^какова\b", r"^котор\w*\b", r"^сколько\b",
-                r"^в каком году\b", r"^правда ли\b", r"^можно ли\b", r"^верно ли\b",
-            ]
-            for p in patterns:
-                try:
-                    if re.search(p, t2):
-                        return True
-                except Exception:
-                    continue
-            return False
-
-        declarative: list[str] = []
-        questions: list[str] = []
-        for sent in sentences:
-            if _is_question_like(sent):
-                questions.append(sent)
-            else:
-                declarative.append(sent)
-        if not declarative:
-            return s
-        out = " ".join(declarative).strip()
-        return out
 
     def _handle_self_transcript(self, transcript: Optional[str]) -> None:
         """Обработка своей речи - просто логируем и игнорируем."""
@@ -1191,16 +1311,21 @@ class LiveVoiceVerifier:
         # Не озвучиваем тезис при старте - ждём вопроса
 
         stop_at = time.time() + run_seconds if run_seconds and run_seconds > 0 else None
+        stream = None
         try:
             self._start_segment_worker()
-            with sd.InputStream(
+            stream = sd.InputStream(
                 channels=CHANNELS,
                 samplerate=SAMPLE_RATE,
                 dtype="float32",
                 blocksize=FRAME_SIZE,  # deliver 20ms blocks
                 callback=callback,
-            ):
+            )
+            with stream:
                 while True:
+                    if self._stop_requested.is_set():
+                        logger.info("Остановка по флагу _stop_requested")
+                        break
                     if stop_at is not None and time.time() >= stop_at:
                         logger.info("Авто-остановка по таймеру run_seconds")
                         break
@@ -1209,8 +1334,9 @@ class LiveVoiceVerifier:
                     except queue.Empty:
                         continue
 
-                    # если сейчас идёт воспроизведение TTS — глушим распознавание (избегаем самоподхвата)
-                    if time.time() < self._suppress_until:
+                    # Подавление самоподхвата: блокируем ТОЛЬКО если используются динамики
+                    # С наушниками микрофон не слышит TTS, блокировка мешает ловить новые вопросы
+                    if not self._use_headphones and time.time() < self._suppress_until:
                         continue
 
                     i = 0
@@ -1281,9 +1407,28 @@ class LiveVoiceVerifier:
                                 self._enqueue_segment("other", wav, dist)
 
         except KeyboardInterrupt:
-            logger.info("Остановлено пользователем")
+            logger.info("⚠️ Остановлено пользователем (Ctrl+C)")
+            self._stop_requested.set()
         finally:
+            # Останавливаем stream явно
+            if stream is not None:
+                try:
+                    stream.stop()
+                    stream.close()
+                except Exception as e:
+                    logger.debug(f"Ошибка остановки stream: {e}")
+            
+            # Останавливаем воркеры и очереди
             self._stop_segment_worker()
+            
+            # Финальная остановка sounddevice
+            if sd is not None:
+                try:
+                    sd.stop()
+                except Exception:
+                    pass
+            
+            logger.info("✅ Остановка завершена")
 
     def _ensure_asr(self) -> FasterWhisperTranscriber:
         if self._asr is None:
@@ -1297,9 +1442,13 @@ class LiveVoiceVerifier:
             )
         return self._asr  # type: ignore[return-value]
 
-    def _speak_text(self, text: str) -> None:
+    def _speak_text(self, text: str, generation: Optional[int] = None) -> None:
         # Если нет текста или TTS не инициализирован — выходим
         if not text or self._tts is None:
+            return
+        # Проверяем поколение - если устарели, выходим
+        if generation is not None and self._tts_generation > generation:
+            logger.debug(f"TTS прервано (устаревшее поколение: {generation} < {self._tts_generation})")
             return
         # ВАЖНО: Если текст пустой или только пробелы - не озвучиваем
         if not text.strip():
@@ -1369,17 +1518,35 @@ class LiveVoiceVerifier:
             chunks = _split_for_tts(s)
 
             for part in chunks:
+                # Проверяем прерывание ПЕРЕД синтезом (новый вопрос)
+                if self._tts_interrupt.is_set() or self._stop_requested.is_set():
+                    logger.debug("TTS прервано до синтеза")
+                    return
+                
                 audio = self._tts.synth(part)
+                
+                # Конвертируем bytes (Google TTS) в numpy array
+                if isinstance(audio, bytes):
+                    if len(audio) == 0:
+                        continue
+                    # Декодируем WAV bytes в numpy
+                    import io, wave
+                    with wave.open(io.BytesIO(audio), 'rb') as wf:
+                        frames = wf.readframes(wf.getnframes())
+                        audio = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
+                
                 if audio.size <= 0:
                     continue
                 duration = float(audio.shape[0]) / float(self._tts.sample_rate)
-                # Устанавливаем suppress ТОЛЬКО если НЕ используем наушники
-                # (в наушниках микрофон не слышит TTS, блокировка не нужна)
+                # Блокируем микрофон ТОЛЬКО если динамики (не наушники)
+                # С наушниками микрофон не слышит TTS, блокировка мешает ловить новые вопросы
                 if not self._use_headphones:
-                    self._suppress_until = time.time() + duration + 2.5
-                    logger.debug(f"Блокировка на {duration + 2.5:.1f}с (динамики)")
+                    # Для динамиков: блокируем на время воспроизведения + минимальный запас
+                    self._suppress_until = time.time() + duration + 0.2
+                    logger.debug(f"Блокировка микрофона на {duration + 0.2:.1f}с (динамики)")
                 else:
-                    logger.debug(f"Наушники - блокировка не нужна")
+                    # Для наушников: микрофон всегда открыт
+                    logger.debug(f"Наушники - микрофон продолжает слушать (TTS {duration:.1f}с)")
                 if self._audio_sink is not None:
                     import io, wave
                     pcm16 = (np.clip(audio, -1.0, 1.0) * 32767.0).astype(np.int16)
@@ -1397,13 +1564,27 @@ class LiveVoiceVerifier:
                 else:
                     if sd is None:
                         continue
-                    sd.stop()
-                    # ВАЖНО: self._is_announcing блокирует повторные объявления тезисов
-                    # Спим полную длительность аудио чтобы дождаться завершения
-                    # Используем device=None чтобы sounddevice использовал системный вывод по умолчанию
-                    # (наушники если подключены, иначе динамик)
-                    sd.play(audio, samplerate=self._tts.sample_rate, device=None)
-                    sd.wait()  # Ждём завершения воспроизведения вместо time.sleep
+                    
+                    # Используем Lock чтобы избежать конфликта PaMacCore
+                    with self._tts_lock:
+                        # Проверяем прерывание перед воспроизведением
+                        if self._tts_interrupt.is_set() or self._stop_requested.is_set():
+                            logger.debug("TTS прервано")
+                            # Останавливаем аудио если прервано
+                            try:
+                                sd.stop()
+                            except Exception:
+                                pass
+                            continue
+                        
+                        # Воспроизводим через системный вывод (наушники если подключены, иначе динамики)
+                        sd.play(audio, samplerate=self._tts.sample_rate, device=None)
+                        sd.wait()  # Ждём завершения воспроизведения
+                        
+                        # Проверяем прерывание ПОСЛЕ воспроизведения (на случай если sd.stop() сработал во время wait)
+                        if self._tts_interrupt.is_set() or self._stop_requested.is_set():
+                            logger.debug("TTS прервано после воспроизведения")
+                            return
         except Exception as e:  # noqa: BLE001
             logger.exception(f"TTS ошибка: {e}")
 
@@ -1446,8 +1627,9 @@ class LiveVoiceVerifier:
                 except queue.Empty:
                     continue
 
-                # подавление самоподхвата во время озвучки
-                if time.time() < self._suppress_until:
+                # Подавление самоподхвата: блокируем ТОЛЬКО если используются динамики
+                # С наушниками микрофон не слышит TTS, блокировка мешает ловить новые вопросы
+                if not self._use_headphones and time.time() < self._suppress_until:
                     continue
 
                 # склеим с хвостом предыдущего блока, если был

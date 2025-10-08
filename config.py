@@ -46,6 +46,8 @@ class ThesisConfig:
     autogen_batch_size: int = 3  # Размер пакета автогенерируемых тезисов
     enable_semantic: bool = True  # Включить семантическое сравнение
     enable_gemini: bool = True  # Включить Gemini-судью
+    max_depth_iterations: int = 7  # Максимум итераций углубления (доп.тезисов)
+    deeper_trigger_idx: int = 2  # Индекс тезиса для триггера углубления (0-based, 2 = 3-й тезис)
     
     @classmethod
     def from_env(cls) -> "ThesisConfig":
