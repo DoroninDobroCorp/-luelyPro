@@ -40,11 +40,9 @@ class ASRConfig:
 class ThesisConfig:
     """Настройки тезисного помощника."""
     match_threshold: float = 0.6  # Порог совпадения по токенам (0..1)
-    semantic_threshold: float = 0.55  # Порог семантической близости (0..1)
     gemini_min_conf: float = 0.60  # Мин. уверенность Gemini-судьи (0..1)
     repeat_interval_sec: float = 10.0  # Интервал повтора текущего тезиса
     autogen_batch_size: int = 3  # Размер пакета автогенерируемых тезисов
-    enable_semantic: bool = True  # Включить семантическое сравнение
     enable_gemini: bool = True  # Включить Gemini-судью
     max_depth_iterations: int = 7  # Максимум итераций углубления (доп.тезисов)
     deeper_trigger_idx: int = 2  # Индекс тезиса для триггера углубления (0-based, 2 = 3-й тезис)

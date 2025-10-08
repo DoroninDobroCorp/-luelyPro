@@ -158,12 +158,15 @@ class GeminiThesisGenerator:
             f"ВСЕ ЦИФРЫ ПРОПИСЬЮ! ОТВЕТ ВСЕГДА ПЕРВЫМ! БЕЗ КОММЕНТАРИЕВ!\n"
             f"НЕ ПОНЯЛ → ПУСТАЯ СТРОКА (не объяснение!)"
         )
+        # ✅ ОПТИМИЗАЦИЯ 3D: Отключаем thinking для снижения латентности
+        # thinking_budget=0 экономит 100-200мс на генерации тезисов.
+        # См. OPTIMIZATION_TABLE.md - код 3D
         cfg = types.GenerateContentConfig(
             system_instruction=sys_instr,
             max_output_tokens=self.max_output_tokens,
             temperature=self.temperature,
             top_p=0.9,
-            thinking_config=types.ThinkingConfig(thinking_budget=0),
+            thinking_config=types.ThinkingConfig(thinking_budget=0),  # НЕ МЕНЯТЬ!
         )
         try:
             resp = self.client.models.generate_content(
@@ -309,13 +312,13 @@ class GeminiThesisGenerator:
             f"ВСЕ ЦИФРЫ ПРОПИСЬЮ! БЕЗ КОММЕНТАРИЕВ!"
         )
         
-        # Конфигурация
+        # ✅ ОПТИМИЗАЦИЯ 3D: Отключаем thinking (см. комментарий выше в generate())
         cfg = types.GenerateContentConfig(
             system_instruction=sys_instr,
             max_output_tokens=self.max_output_tokens,
             temperature=self.temperature,
             top_p=0.9,
-            thinking_config=types.ThinkingConfig(thinking_budget=0),
+            thinking_config=types.ThinkingConfig(thinking_budget=0),  # НЕ МЕНЯТЬ!
         )
         
         try:

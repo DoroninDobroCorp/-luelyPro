@@ -39,7 +39,6 @@ py-modules = [
   "live_recognizer",
   "llm_answer",
   "main",
-  "semantic_matcher",
   "thesis_generator",
   "thesis_judge",
   "thesis_prompter",

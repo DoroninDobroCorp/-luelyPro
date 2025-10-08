@@ -49,6 +49,10 @@ class OpenAITTS:
     def __init__(
         self,
         api_key: Optional[str] = None,
+        # ✅ ОПТИМИЗАЦИЯ 2D: Используем tts-1 (быстрая модель)
+        # tts-1 в 1.5-2x быстрее чем tts-1-hd (300-500мс vs 800-1200мс)
+        # Качество отличное для озвучки тезисов. tts-1-hd нужен только для продакшн аудио.
+        # См. OPTIMIZATION_TABLE.md - код 2D
         model: str = "tts-1",
         voice: str = "onyx",
         speed: float = 1.0,

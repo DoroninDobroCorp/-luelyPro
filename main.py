@@ -285,23 +285,6 @@ def build_parser() -> argparse.ArgumentParser:
         default=0.6,
         help="Порог совпадения тезиса (0..1) при распознавании вашей речи",
     )
-    p_live.add_argument(
-        "--thesis-semantic",
-        type=float,
-        default=0.55,
-        help="Порог семантического совпадения тезиса (0..1)",
-    )
-    p_live.add_argument(
-        "--thesis-semantic-model",
-        type=str,
-        default=None,
-        help="ИД модели эмбеддингов для семантического сравнения (по умолчанию multilingual-e5-small)",
-    )
-    p_live.add_argument(
-        "--thesis-semantic-disable",
-        action="store_true",
-        help="Отключить семантический анализ (только токены)",
-    )
     # Gemini judge
     p_live.add_argument(
         "--thesis-gemini-conf",

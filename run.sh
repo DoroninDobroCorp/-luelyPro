@@ -110,16 +110,16 @@ case "$MODE" in
         echo -e "  ./run.sh [режим]"
         echo ""
         echo -e "${GREEN}Режимы:${NC}"
-        echo -e "  ${BLUE}default${NC}  - Обычный запуск (модель small)"
-        echo -e "  ${BLUE}test${NC}     - Тестовый режим (10 сек, модель tiny)"
-        echo -e "  ${BLUE}fast${NC}     - Быстрый режим (модель base)"
-        echo -e "  ${BLUE}quality${NC}  - Режим качества (модель large-v3-turbo)"
-        echo -e "  ${BLUE}help${NC}     - Показать эту справку"
+        echo -e "  ${BLUE}default${NC}   - Обычный запуск (OpenAI ASR)"
+        echo -e "  ${BLUE}test${NC}      - Тестовый режим (10 сек)"
+        echo -e "  ${BLUE}fast${NC}      - Быстрый режим"
+        echo -e "  ${BLUE}quality${NC}   - Режим качества"
+        echo -e "  ${BLUE}help${NC}      - Показать эту справку"
         echo ""
         echo -e "${GREEN}Примеры:${NC}"
         echo -e "  ./run.sh              # Обычный запуск"
         echo -e "  ./run.sh test         # Быстрый тест"
-        echo -e "  ./run.sh quality      # Лучшее качество ASR"
+        echo -e "  ./run.sh quality      # Лучшее качество"
         exit 0
         ;;
     "default"|*)

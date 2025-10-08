@@ -400,9 +400,6 @@ class LiveVoiceVerifier:
         llm_enable: bool = False,
         # Thesis настройки (используем дефолты из ThesisConfig)
         thesis_match_threshold: float = 0.6,
-        thesis_semantic_enable: bool = True,
-        thesis_semantic_threshold: float = 0.55,
-        thesis_semantic_model: Optional[str] = None,
         thesis_gemini_enable: bool = True,
         thesis_gemini_min_conf: float = 0.60,
         thesis_autogen_enable: bool = True,
@@ -550,11 +547,13 @@ class LiveVoiceVerifier:
             except ValueError:
                 tts_speed = 1.35
             
-            # OpenAI TTS (РЕКОМЕНДУЕТСЯ: быстро + просто + качественно)
+            # ✅ ОПТИМИЗАЦИЯ 2A: OpenAI TTS - РЕКОМЕНДУЕТСЯ (ускорение 3-5x vs Silero)
+            # OpenAI TTS в 3-5 раз быстрее Silero (300-800мс vs 2-5сек на тезис).
+            # См. OPTIMIZATION_TABLE.md - код 2A
             if tts_engine == "openai" and OpenAITTS is not None and OPENAI_AVAILABLE:
                 try:
                     self._tts = OpenAITTS(
-                        model="tts-1",           # tts-1 (быстро) | tts-1-hd (качественно)
+                        model="tts-1",           # ✅ 2D: tts-1 (быстро) | tts-1-hd (качественно)
                         voice="onyx",            # onyx (мужской) | nova (женский)
                         speed=tts_speed,
                     )
@@ -764,27 +763,14 @@ class LiveVoiceVerifier:
             
             try:
                 if segment.kind == "self":
-                    # ОТКЛЮЧЕНО: не распознаем свой голос, только фиксируем
+                    # Свой голос просто логируем и игнорируем
                     logger.debug("мой голос (игнорируем)")
-                    # self._handle_self_segment(segment)
                 else:
                     self._handle_foreign_segment_with_asr(segment, local_asr)
             except Exception as e:  # noqa: BLE001
                 logger.exception(f"Ошибка обработки сегмента: {e}")
             finally:
                 self._segment_queue.task_done()
-
-    def _handle_self_segment(self, segment: QueuedSegment) -> None:
-        logger.info("мой голос")
-        if not self.asr_enable:
-            logger.debug("ASR отключён — пропускаю анализ собственной речи")
-            return
-        try:
-            transcript = self._ensure_asr().transcribe_np(segment.audio, SAMPLE_RATE)
-        except Exception as e:  # noqa: BLE001
-            logger.exception(f"ASR ошибка при распознавании моего голоса: {e}")
-            return
-        self._handle_self_transcript(transcript)
 
     def _handle_foreign_segment_with_asr(self, segment: QueuedSegment, local_asr: Optional[FasterWhisperTranscriber]) -> None:
         """Обработка чужого сегмента с локальным ASR (для параллельных воркеров)"""
@@ -798,24 +784,6 @@ class LiveVoiceVerifier:
                 asr_elapsed = (time.time() - asr_start) * 1000
                 worker_name = threading.current_thread().name
                 logger.debug(f"⏱️  [{worker_name}] ASR обработка: {asr_elapsed:.0f}мс (аудио {segment_duration:.2f}с)")
-            except Exception as e:  # noqa: BLE001
-                logger.exception(f"ASR ошибка: {e}")
-                return
-            self._handle_foreign_text(text)
-        else:
-            logger.info("незнакомый голос")
-    
-    def _handle_foreign_segment(self, segment: QueuedSegment) -> None:
-        """Legacy метод для обратной совместимости - использует глобальный ASR"""
-        segment_duration = segment.audio.size / SAMPLE_RATE
-        logger.debug(f"📏 Длина сегмента: {segment_duration:.2f}с")
-        
-        if self.asr_enable:
-            try:
-                asr_start = time.time()
-                text = self._ensure_asr().transcribe_np(segment.audio, SAMPLE_RATE)
-                asr_elapsed = (time.time() - asr_start) * 1000
-                logger.debug(f"⏱️  ASR обработка: {asr_elapsed:.0f}мс (аудио {segment_duration:.2f}с)")
             except Exception as e:  # noqa: BLE001
                 logger.exception(f"ASR ошибка: {e}")
                 return
@@ -1278,7 +1246,7 @@ class LiveVoiceVerifier:
     def live_verify(
         self,
         profile: VoiceProfile,
-        min_segment_ms: int = 500,  # минимальная длительность сегмента для эмбеддинга
+        min_segment_ms: int = 1500,  # минимальная длительность сегмента (1.5s = фильтр коротких шумов)
         max_silence_ms: int = 400,  # завершение сегмента после паузы
         pre_roll_ms: int = 160,     # предзахват аудио до старта сегмента
         run_seconds: float = 0.0,   # авто-остановка (0 = бесконечно)
@@ -1593,7 +1561,7 @@ class LiveVoiceVerifier:
         self,
         profile: VoiceProfile,
         frame_queue: "queue.Queue[np.ndarray]",
-        min_segment_ms: int = 500,
+        min_segment_ms: int = 1500,
         max_silence_ms: int = 400,
         pre_roll_ms: int = 160,
         run_seconds: float = 0.0,
@@ -2057,7 +2025,7 @@ def live_cli(
     vad_aggr: int = 2,
     min_consec: int = 5,
     flatness_th: float = 0.60,
-    min_segment_ms: int = 500,
+    min_segment_ms: int = 1500,
     max_silence_ms: int = 400,
     pre_roll_ms: int = 160,
     # VAD backend

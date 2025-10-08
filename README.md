@@ -126,19 +126,6 @@ AI-судья для оценки раскрытия тезиса через Goo
 - Возвращает пустой массив если тема неизвестна
 - Фильтрует объяснения типа "не знаю", "нет информации"
 
-### semantic_matcher.py
-Семантическое сравнение текстов через трансформерные эмбеддинги.
-
-**Класс:**
-- `SemanticMatcher` - сравнение текстов
-
-**Основные функции:**
-- `encode(text)` - получение эмбеддинга текста
-- `score(text_a, text_b)` - семантическая близость (0..1)
-
-**Используемая модель:**
-- `intfloat/multilingual-e5-small` (многоязычная)
-
 ### llm_answer.py
 Генерация ответов на вопросы через Google Gemini.
 
@@ -294,7 +281,6 @@ python main.py profiles delete --all
 
 **Тезисы:**
 - `--thesis-match 0..1` - порог совпадения токенов (по умолчанию 0.6)
-- `--thesis-semantic 0..1` - порог семантической близости (по умолчанию 0.55)
 - `--thesis-gemini-conf 0..1` - мин. уверенность Gemini (по умолчанию 0.60)
 
 **Система:**
@@ -361,7 +347,6 @@ ASSISTANT_RUN_SECONDS=0         # альтернативное имя
 - **TTS**: Silero TTS (русские голоса)
 - **VAD**: Silero VAD / WebRTC VAD
 - **Эмбеддинги голоса**: pyannote.audio (ECAPA-TDNN)
-- **Семантика**: multilingual-e5-small (sentence-transformers)
 - **Аудио**: sounddevice, numpy
 
 ## Требования
@@ -383,7 +368,6 @@ CluelyPro/
 ├── thesis_prompter.py         # Менеджер тезисов
 ├── thesis_judge.py            # AI-судья (Gemini)
 ├── thesis_generator.py        # Генератор тезисов (Gemini)
-├── semantic_matcher.py        # Семантическое сравнение
 │
 ├── llm_answer.py              # LLM ответы (Gemini)
 ├── asr_transcriber.py         # ASR (faster-whisper)

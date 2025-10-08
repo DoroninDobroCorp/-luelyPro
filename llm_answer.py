@@ -98,14 +98,17 @@ class LLMResponder:
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
     ) -> types.GenerateContentConfig:
-        # Минимизируем задержку, отключая "thinking"
+        # ✅ ОПТИМИЗАЦИЯ 3D: Отключаем thinking для снижения латентности
+        # thinking_budget=0 отключает chain-of-thought рассуждения Gemini,
+        # что даёт экономию 100-200мс на запрос без потери качества для коротких ответов.
+        # См. OPTIMIZATION_TABLE.md - код 3D
         sys_instr = self._SYSTEM_PROMPT + (" " + extra_instruction if extra_instruction else "")
         return types.GenerateContentConfig(
             system_instruction=sys_instr,
             max_output_tokens=int(max_tokens if max_tokens is not None else self.max_new_tokens),
             temperature=float(temperature if temperature is not None else self.temperature),
             top_p=float(self.top_p),
-            thinking_config=types.ThinkingConfig(thinking_budget=0),
+            thinking_config=types.ThinkingConfig(thinking_budget=0),  # НЕ МЕНЯТЬ! См. комментарий выше
         )
 
     @staticmethod
