@@ -230,6 +230,11 @@ class ThesisManager:
     - После 3-го тезиса (2-е повторение): запрос 5 дополнительных тезисов (параллельно)
     - Углубление до 7 итераций максимум
     - При новом вопросе с новыми тезисами: мгновенное прерывание старых
+    
+    ✅ ОПТИМИЗАЦИЯ 2B: Параллельная генерация TTS для тезисов
+    - При start_new_question запускается параллельная генерация TTS для первых 2-3 тезисов
+    - Пока озвучивается первый тезис, генерируются следующие
+    - Ускорение 40-50% времени ожидания. См. OPTIMIZATION_TABLE.md - код 2B
     """
     
     def __init__(
@@ -237,10 +242,12 @@ class ThesisManager:
         generator: Optional["GeminiThesisGenerator"],
         max_depth_iterations: int = 7,
         deeper_trigger_idx: int = 2,
+        tts_engine: Optional[object] = None,  # TTS для предгенерации
     ):
         self.generator = generator
         self.max_depth_iterations = max_depth_iterations
         self.deeper_trigger_idx = deeper_trigger_idx
+        self.tts_engine = tts_engine  # Ссылка на TTS
         
         # Текущее состояние
         self.theses: List[str] = []  # Все тезисы (первые + углубленные)
@@ -255,6 +262,12 @@ class ThesisManager:
         self.deeper_request_thread: Optional[threading.Thread] = None
         self.pending_deeper_theses: List[str] = []  # Готовые доп.тезисы
         self.lock = threading.Lock()  # Защита от гонки
+        
+        # ✅ ОПТИМИЗАЦИЯ 2B: Кэш предгенерированных аудио (параллельная TTS)
+        from concurrent.futures import ThreadPoolExecutor, Future
+        self.audio_cache: dict[int, Future] = {}  # {индекс_тезиса: Future[audio_np]}
+        self.tts_executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix="tts-prefetch")
+        self.prefetch_enabled = True  # Флаг для включения/выключения предгенерации
     
     def start_new_question(
         self, 
@@ -272,6 +285,17 @@ class ThesisManager:
             self.depth_iterations = 0
             self.deeper_request_in_progress = False
             self.pending_deeper_theses = []
+            
+            # ✅ ОПТИМИЗАЦИЯ 2B: Очищаем старый кэш и запускаем предгенерацию TTS
+            self.audio_cache.clear()
+            if self.prefetch_enabled and self.tts_engine is not None and len(theses) > 0:
+                # Предгенерируем TTS для первых 2-3 тезисов параллельно
+                prefetch_count = min(3, len(theses))
+                for i in range(prefetch_count):
+                    future = self.tts_executor.submit(self._generate_tts_audio, theses[i])
+                    self.audio_cache[i] = future
+                logger.debug(f"🎵 Запущена предгенерация TTS для {prefetch_count} тезисов")
+            
             logger.info(f"🎤 Новый вопрос: {len(theses)} тезисов")
     
     def get_next_thesis(self) -> Optional[str]:
@@ -359,6 +383,54 @@ class ThesisManager:
             daemon=True
         )
         self.deeper_request_thread.start()
+    
+    def _generate_tts_audio(self, text: str) -> Optional[np.ndarray]:
+        """
+        ✅ ОПТИМИЗАЦИЯ 2B: Генерация TTS аудио для одного тезиса (для ThreadPoolExecutor)
+        """
+        if not self.tts_engine or not text:
+            return None
+        
+        try:
+            tts_start = time.time()
+            audio = self.tts_engine.synth(text)
+            
+            # Конвертируем bytes (Google TTS) в numpy array
+            if isinstance(audio, bytes):
+                if len(audio) == 0:
+                    return None
+                # Декодируем WAV bytes в numpy
+                with wave.open(io.BytesIO(audio), 'rb') as wf:
+                    frames = wf.readframes(wf.getnframes())
+                    audio = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
+            
+            tts_elapsed = (time.time() - tts_start) * 1000
+            logger.debug(f"✓ TTS предгенерация: {tts_elapsed:.0f}мс ({len(text)} символов)")
+            return audio
+        except Exception as e:
+            logger.error(f"Ошибка предгенерации TTS: {e}")
+            return None
+    
+    def get_cached_audio(self, index: int) -> Optional[np.ndarray]:
+        """
+        ✅ ОПТИМИЗАЦИЯ 2B: Получить готовое аудио из кэша (если есть)
+        Возвращает None если кэш пустой или генерация еще не завершена
+        """
+        with self.lock:
+            if index not in self.audio_cache:
+                return None
+            
+            future = self.audio_cache[index]
+            
+        # Проверяем готовность (без блокировки)
+        if not future.done():
+            return None
+        
+        try:
+            return future.result(timeout=0.1)
+        except Exception as e:
+            logger.debug(f"Ошибка получения кэшированного аудио: {e}")
+            return None
     
     def has_more_theses(self) -> bool:
         """Проверить есть ли еще тезисы или ожидаются углубленные"""
@@ -478,8 +550,10 @@ class LiveVoiceVerifier:
         # Контекст диалога за последние 30 секунд (для местоимений)
         self._dialogue_context: list[tuple[float, str]] = []  # [(timestamp, text), ...]
         self._context_window_sec: float = 30.0  # Окно контекста в секундах
-        # Увеличенная очередь для буферизации во время озвучки тезисов (5 тезисов × 2 повтора + запас)
-        self._segment_queue: "queue.Queue[QueuedSegment]" = queue.Queue(maxsize=20)
+        # ✅ ОПТИМИЗАЦИЯ 6C: Оптимизация очереди - maxsize 20 → 8
+        # 2 воркера × 3 сегмента в обработке + 2 в очереди = 8 (вместо 20)
+        # Снижает memory и latency при перегрузке. См. OPTIMIZATION_TABLE.md - код 6C
+        self._segment_queue: "queue.Queue[QueuedSegment]" = queue.Queue(maxsize=8)
         self._segment_workers: List[threading.Thread] = []  # Список воркеров для параллельной обработки
         self._segment_stop = threading.Event()
         self._num_asr_workers: int = int(os.getenv("ASR_WORKERS", "2"))  # Количество параллельных воркеров
@@ -590,6 +664,11 @@ class LiveVoiceVerifier:
             
             if self._tts is None:
                 logger.warning("❌ TTS не установлен, озвучка недоступна")
+            
+            # ✅ ОПТИМИЗАЦИЯ 2B: Обновляем ссылку на TTS в ThesisManager
+            if self._tts is not None:
+                self._thesis_manager.tts_engine = self._tts
+                logger.debug("✓ ThesisManager подключен к TTS для предгенерации")
 
         logger.info(
             f"LiveVoiceVerifier initialized | model={model_id}, device={self.device}, threshold={threshold}, VAD={self.vad_backend}"
@@ -779,6 +858,9 @@ class LiveVoiceVerifier:
         
         if self.asr_enable and local_asr is not None:
             try:
+                # ✅ ОПТИМИЗАЦИЯ 8A: Засекаем время ДО ASR для корректных метрик
+                processing_start = time.time()
+                
                 asr_start = time.time()
                 text = local_asr.transcribe_np(segment.audio, SAMPLE_RATE)
                 asr_elapsed = (time.time() - asr_start) * 1000
@@ -787,13 +869,21 @@ class LiveVoiceVerifier:
             except Exception as e:  # noqa: BLE001
                 logger.exception(f"ASR ошибка: {e}")
                 return
-            self._handle_foreign_text(text)
+            self._handle_foreign_text(text, asr_elapsed=asr_elapsed, processing_start=processing_start)
         else:
             logger.info("незнакомый голос")
 
-    def _handle_foreign_text(self, text: Optional[str]) -> None:
-        """Обработка чужого голоса: ASR → генерация тезисов → LLM ответ → TTS"""
-        processing_start = time.time()
+    def _handle_foreign_text(self, text: Optional[str], asr_elapsed: float = 0.0, processing_start: Optional[float] = None) -> None:
+        """Обработка чужого голоса: ASR → генерация тезисов → LLM ответ → TTS
+        
+        Args:
+            text: Распознанный текст от ASR
+            asr_elapsed: Время выполнения ASR в миллисекундах
+            processing_start: Время начала обработки (до ASR), для корректных метрик
+        """
+        if processing_start is None:
+            processing_start = time.time()
+        
         t = (text or "").strip()
         if not t:
             logger.info("Чужой голос (ASR: пусто)")
@@ -826,7 +916,9 @@ class LiveVoiceVerifier:
         
         logger.debug(f"Контекст: {len(self._dialogue_context)-1} реплик, текущий вопрос: {current_question}")
         
-        # Генерируем тезисы через thesis_generator (формат: "тезис1 ||| тезис2 ||| тезис3")
+        # ✅ ОПТИМИЗАЦИЯ 3C: Параллельная генерация тезисов + прогрев TTS
+        # Запускаем Gemini и TTS warmup параллельно → ускорение 15-25%
+        # См. OPTIMIZATION_TABLE.md - код 3C
         if self._thesis_generator is None and GeminiThesisGenerator is not None:
             try:
                 self._thesis_generator = GeminiThesisGenerator()
@@ -835,16 +927,65 @@ class LiveVoiceVerifier:
         
         if self._thesis_generator:
             try:
-                # Передаём текущий вопрос И контекст отдельно
+                from concurrent.futures import ThreadPoolExecutor, as_completed
+                
                 gemini_start = time.time()
-                theses_raw = self._thesis_generator.generate(
-                    current_question, 
-                    n=5, 
-                    language="ru",
-                    context=context_text
-                )
-                gemini_elapsed = (time.time() - gemini_start) * 1000
-                logger.debug(f"⏱️  Gemini API: {gemini_elapsed:.0f}мс")
+                
+                # Функция генерации тезисов
+                def generate_theses():
+                    return self._thesis_generator.generate(
+                        current_question, 
+                        n=5, 
+                        language="ru",
+                        context=context_text
+                    )
+                
+                # Функция прогрева TTS (сгенерировать короткое аудио)
+                def warmup_tts():
+                    if self._tts is not None:
+                        try:
+                            # Генерируем короткое аудио для прогрева модели
+                            warmup_text = "тест"
+                            warmup_audio = self._tts.synth(warmup_text)
+                            
+                            # Если bytes - декодируем
+                            if isinstance(warmup_audio, bytes) and len(warmup_audio) > 0:
+                                with wave.open(io.BytesIO(warmup_audio), 'rb') as wf:
+                                    frames = wf.readframes(wf.getnframes())
+                                    warmup_audio = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
+                            
+                            logger.debug("✓ TTS прогрет")
+                            return True
+                        except Exception as e:
+                            logger.debug(f"TTS warmup ошибка: {e}")
+                            return False
+                    return False
+                
+                # Запускаем параллельно через ThreadPoolExecutor
+                with ThreadPoolExecutor(max_workers=2, thread_name_prefix="gen-warmup") as executor:
+                    # Запускаем обе задачи
+                    thesis_future = executor.submit(generate_theses)
+                    warmup_future = executor.submit(warmup_tts)
+                    
+                    # Ждём результаты (Gemini обычно дольше, поэтому ждём его)
+                    theses_raw = thesis_future.result(timeout=5.0)
+                    # TTS warmup может завершиться быстрее, не блокируем
+                    try:
+                        warmup_future.result(timeout=0.1)
+                    except Exception:
+                        pass
+                
+                llm_elapsed = (time.time() - gemini_start) * 1000
+                
+                # Определяем какой движок использовался
+                llm_name = "LLM"
+                if hasattr(self._thesis_generator, 'primary_engine'):
+                    if self._thesis_generator.primary_engine == "cerebras":
+                        llm_name = "Cerebras"
+                    elif self._thesis_generator.primary_engine == "gemini":
+                        llm_name = "Gemini"
+                
+                logger.debug(f"⏱️  {llm_name} API (параллельно с TTS warmup): {llm_elapsed:.0f}мс")
                 
                 # Парсим тезисы - ожидаем список строк или одну строку с |||
                 theses = []
@@ -901,9 +1042,20 @@ class LiveVoiceVerifier:
                     # Запоминаем текущее поколение для нового потока
                     current_generation = self._tts_generation
                     
-                    # Логируем общее время обработки
+                    # ✅ ОПТИМИЗАЦИЯ 8A: Детализированные метрики обработки вопроса
                     total_elapsed = (time.time() - processing_start) * 1000
-                    logger.info(f"⏱️  ИТОГО обработка вопроса: {total_elapsed:.0f}мс")
+                    # Вычисляем долю каждого компонента
+                    asr_pct = (asr_elapsed / total_elapsed * 100) if total_elapsed > 0 else 0
+                    llm_pct = (llm_elapsed / total_elapsed * 100) if total_elapsed > 0 else 0
+                    other_pct = 100 - asr_pct - llm_pct
+                    
+                    logger.info(
+                        f"⏱️  МЕТРИКИ ОБРАБОТКИ ВОПРОСА:\n"
+                        f"  • ASR:     {asr_elapsed:6.0f}мс ({asr_pct:5.1f}%)\n"
+                        f"  • {llm_name:8s} {llm_elapsed:6.0f}мс ({llm_pct:5.1f}%)\n"
+                        f"  • Другое:  {other_pct:5.1f}% (парсинг, контекст)\n"
+                        f"  • ИТОГО:   {total_elapsed:6.0f}мс"
+                    )
                     
                     # Озвучиваем тезисы в отдельном потоке чтобы не блокировать прием новых вопросов
                     def announce_theses():
@@ -933,8 +1085,8 @@ class LiveVoiceVerifier:
                                 
                                 logger.debug(f"🔊 Тезис {idx}/{total} ({repeat}/2): {thesis[:50]}...")
                                 
-                                # Озвучиваем тезис
-                                self._speak_text(thesis, generation=my_generation)
+                                # ✅ ОПТИМИЗАЦИЯ 2B: Озвучиваем тезис с индексом для кэша
+                                self._speak_text(thesis, generation=my_generation, thesis_index=self._thesis_manager.current_idx)
                                 
                                 # Проверяем прерывание после озвучки
                                 if self._tts_generation > my_generation or self._tts_interrupt.is_set() or self._stop_requested.is_set():
@@ -1409,8 +1561,51 @@ class LiveVoiceVerifier:
                 language=self.asr_language,
             )
         return self._asr  # type: ignore[return-value]
+    
+    def _play_cached_audio(self, audio: np.ndarray, generation: Optional[int] = None) -> None:
+        """
+        ✅ ОПТИМИЗАЦИЯ 2B: Воспроизведение предгенерированного аудио из кэша
+        """
+        if audio.size <= 0 or self._tts is None:
+            return
+        
+        # Проверяем прерывание
+        if generation is not None and self._tts_generation > generation:
+            logger.debug("Кэшированное аудио прервано (устаревшее поколение)")
+            return
+        
+        if self._tts_interrupt.is_set() or self._stop_requested.is_set():
+            logger.debug("Кэшированное аудио прервано")
+            return
+        
+        duration = float(audio.shape[0]) / float(self._tts.sample_rate)
+        
+        # Блокируем микрофон ТОЛЬКО если динамики
+        if not self._use_headphones:
+            self._suppress_until = time.time() + duration + 0.2
+            logger.debug(f"Блокировка микрофона на {duration + 0.2:.1f}с (кэш)")
+        
+        # Воспроизводим
+        if sd is None:
+            return
+        
+        with self._tts_lock:
+            if self._tts_interrupt.is_set() or self._stop_requested.is_set():
+                logger.debug("Прервано до воспроизведения (кэш)")
+                try:
+                    sd.stop()
+                except Exception:
+                    pass
+                return
+            
+            sd.play(audio, samplerate=self._tts.sample_rate, device=None)
+            sd.wait()
+            
+            if self._tts_interrupt.is_set() or self._stop_requested.is_set():
+                logger.debug("Прервано после воспроизведения (кэш)")
+                return
 
-    def _speak_text(self, text: str, generation: Optional[int] = None) -> None:
+    def _speak_text(self, text: str, generation: Optional[int] = None, thesis_index: Optional[int] = None) -> None:
         # Если нет текста или TTS не инициализирован — выходим
         if not text or self._tts is None:
             return
@@ -1422,6 +1617,16 @@ class LiveVoiceVerifier:
         if not text.strip():
             logger.debug("Пустой ответ - не озвучиваем")
             return
+        
+        # ✅ ОПТИМИЗАЦИЯ 2B: Проверяем кэш предгенерированного аудио
+        cached_audio = None
+        if thesis_index is not None:
+            cached_audio = self._thesis_manager.get_cached_audio(thesis_index)
+            if cached_audio is not None:
+                logger.debug(f"✓ Использую кэшированное аудио для тезиса {thesis_index}")
+                # Воспроизводим кэшированное аудио напрямую
+                self._play_cached_audio(cached_audio, generation)
+                return
         try:
             # Базовая валидация: не озвучиваем JSON-подобные ключи и пустые конструкции
             s = (text or "").strip()
@@ -1485,13 +1690,19 @@ class LiveVoiceVerifier:
 
             chunks = _split_for_tts(s)
 
+            # ✅ ОПТИМИЗАЦИЯ 8A: Метрики времени TTS
+            tts_start = time.time()
+            
             for part in chunks:
                 # Проверяем прерывание ПЕРЕД синтезом (новый вопрос)
                 if self._tts_interrupt.is_set() or self._stop_requested.is_set():
                     logger.debug("TTS прервано до синтеза")
                     return
                 
+                chunk_start = time.time()
                 audio = self._tts.synth(part)
+                chunk_elapsed = (time.time() - chunk_start) * 1000
+                logger.debug(f"⏱️  TTS chunk: {chunk_elapsed:.0f}мс ({len(part)} символов)")
                 
                 # Конвертируем bytes (Google TTS) в numpy array
                 if isinstance(audio, bytes):
@@ -1553,6 +1764,11 @@ class LiveVoiceVerifier:
                         if self._tts_interrupt.is_set() or self._stop_requested.is_set():
                             logger.debug("TTS прервано после воспроизведения")
                             return
+            
+            # ✅ ОПТИМИЗАЦИЯ 8A: Итоговая метрика TTS
+            tts_elapsed = (time.time() - tts_start) * 1000
+            logger.debug(f"⏱️  TTS ИТОГО: {tts_elapsed:.0f}мс ({len(chunks)} chunks)")
+            
         except Exception as e:  # noqa: BLE001
             logger.exception(f"TTS ошибка: {e}")
 

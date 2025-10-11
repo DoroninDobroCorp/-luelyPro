@@ -20,6 +20,13 @@ except ImportError:
     OPENAI_AVAILABLE = False
     OpenAI = None  # type: ignore
 
+# ✅ ОПТИМИЗАЦИЯ 3B: Cerebras fallback (очень быстрый!)
+try:
+    from cerebras_llm import CerebrasLLM, CEREBRAS_AVAILABLE
+except ImportError:
+    CEREBRAS_AVAILABLE = False
+    CerebrasLLM = None  # type: ignore
+
 load_dotenv()
 
 
@@ -64,14 +71,32 @@ class LLMResponder:
         except Exception as e:
             raise LLMError(f"Не удалось инициализировать Gemini client: {e}") from e
         
-        # Инициализация OpenAI fallback (опционально)
+        # ✅ ОПТИМИЗАЦИЯ 3B: Cerebras fallback (приоритет #1 - самый быстрый!)
+        self.cerebras_client = None
+        if use_openai_fallback and CEREBRAS_AVAILABLE:  # Используем тот же флаг use_openai_fallback
+            cerebras_key = os.getenv("CEREBRAS_API_KEY")
+            if cerebras_key:
+                try:
+                    self.cerebras_client = CerebrasLLM(
+                        api_key=cerebras_key,
+                        model="llama3.3-70b",
+                        max_tokens=self.max_new_tokens,
+                        temperature=self.temperature,
+                    )
+                    logger.info("✅ Cerebras fallback включен (ПРИОРИТЕТ #1 - очень быстро!)")
+                except Exception as e:
+                    logger.warning(f"Cerebras fallback недоступен: {e}")
+            else:
+                logger.debug("CEREBRAS_API_KEY не найден, Cerebras fallback отключен")
+        
+        # OpenAI fallback (приоритет #2)
         self.openai_client = None
         if use_openai_fallback and OPENAI_AVAILABLE:
             openai_key = os.getenv("OPENAI_API_KEY")
             if openai_key:
                 try:
                     self.openai_client = OpenAI(api_key=openai_key)
-                    logger.info("OpenAI fallback включен: model=gpt-4o-mini")
+                    logger.info("✅ OpenAI fallback включен (ПРИОРИТЕТ #2): model=gpt-4o-mini")
                 except Exception as e:
                     logger.warning(f"OpenAI fallback недоступен: {e}")
             else:
@@ -237,6 +262,42 @@ class LLMResponder:
         except Exception:
             return text
 
+    def _generate_cerebras(self, user_text: str, intent: str) -> str:
+        """
+        ✅ ОПТИМИЗАЦИЯ 3B: Генерация через Cerebras (fallback)
+        Cerebras в 5-10 раз быстрее Gemini Flash
+        """
+        if not self.cerebras_client:
+            return ""
+        
+        try:
+            # Формируем историю для Cerebras
+            history = []
+            if self.enable_history and self.history:
+                for role, text in self.history[-(self.history_max_turns * 2):]:
+                    history.append((role, text))
+            
+            # Текущий запрос
+            extra, max_toks = self._extra_instruction_for(intent)
+            system_prompt = self._SYSTEM_PROMPT
+            if extra:
+                system_prompt += f"\n\n{extra}"
+            
+            # Вызываем Cerebras API
+            text = self.cerebras_client.generate_answer(
+                question=user_text.strip(),
+                system_prompt=system_prompt,
+                history=history,
+            )
+            
+            if text:
+                logger.debug(f"Cerebras fallback вернул {len(text)} символов")
+            return text
+            
+        except Exception as e:
+            logger.error(f"Cerebras fallback ошибка: {e}")
+            return ""
+    
     def _generate_openai(self, user_text: str, intent: str) -> str:
         """Генерация через OpenAI (fallback)"""
         if not self.openai_client:
@@ -357,18 +418,47 @@ class LLMResponder:
             
             logger.error(f"LLM (Gemini) ошибка: {e}")
             
-            # Если сервер перегружен И OpenAI fallback доступен - пробуем OpenAI
-            if is_server_overload and self.openai_client:
-                logger.warning("Gemini перегружен (503), переключаемся на OpenAI fallback")
-                text = self._generate_openai(user_text, intent)
+            # ✅ ОПТИМИЗАЦИЯ 3B: Fallback цепочка при перегрузке Gemini
+            # Порядок: Gemini → Cerebras → OpenAI (от самого быстрого к надежному)
+            if is_server_overload:
+                # Приоритет #1: Cerebras (самый быстрый!)
+                if self.cerebras_client:
+                    logger.warning("Gemini перегружен (503), переключаемся на Cerebras fallback (FAST!)")
+                    text = self._generate_cerebras(user_text, intent)
+                    if text:
+                        # Пост-обработка
+                        text = self._numbers_to_words_ru(text)
+                        if self._has_latin(text):
+                            text2 = self._rewrite_without_latin(text)
+                            if text2:
+                                text = text2
+                        # Обновляем историю
+                        if self.enable_history:
+                            self.history.append(("user", user_text.strip()))
+                            self.history.append(("model", text))
+                            if len(self.history) > self.history_max_turns * 2:
+                                self.history = self.history[-(self.history_max_turns * 2) :]
+                        logger.info("✅ Cerebras fallback успешно вернул ответ")
+                        return text
+                    # Если Cerebras не сработал - пробуем OpenAI
+                    elif self.openai_client:
+                        logger.warning("Cerebras не сработал, пробуем OpenAI fallback")
+                        text = self._generate_openai(user_text, intent)
+                # Приоритет #2: OpenAI (если Cerebras недоступен)
+                elif self.openai_client:
+                    logger.warning("Gemini перегружен (503), переключаемся на OpenAI fallback")
+                    text = self._generate_openai(user_text, intent)
+                else:
+                    logger.error("Нет доступных fallback'ов (Cerebras/OpenAI)")
+                    raise LLMError(f"Ошибка генерации ответа: {e}") from e
+                
+                # Пост-обработка для OpenAI fallback
                 if text:
-                    # Пост-обработка
                     text = self._numbers_to_words_ru(text)
                     if self._has_latin(text):
                         text2 = self._rewrite_without_latin(text)
                         if text2:
                             text = text2
-                    # Обновляем историю
                     if self.enable_history:
                         self.history.append(("user", user_text.strip()))
                         self.history.append(("model", text))
@@ -377,9 +467,10 @@ class LLMResponder:
                     logger.info("✅ OpenAI fallback успешно вернул ответ")
                     return text
                 else:
-                    logger.error("OpenAI fallback тоже не сработал")
+                    logger.error("Все fallback'ы не сработали")
+                    raise LLMError(f"Ошибка генерации ответа: {e}") from e
             
-            # Если fallback не помог или недоступен - бросаем исключение
+            # Если это не перегрузка - бросаем исключение сразу
             raise LLMError(f"Ошибка генерации ответа: {e}") from e
 
 

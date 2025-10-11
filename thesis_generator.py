@@ -17,13 +17,23 @@ except ImportError:
     OPENAI_AVAILABLE = False
     OpenAI = None  # type: ignore
 
+# ✅ ОПТИМИЗАЦИЯ 3B: Cerebras fallback (очень быстрый!)
+try:
+    from cerebras_llm import CerebrasLLM, CEREBRAS_AVAILABLE
+except ImportError:
+    CEREBRAS_AVAILABLE = False
+    CerebrasLLM = None  # type: ignore
+
 load_dotenv()
 
 
 @dataclass
 class ThesisGenConfig:
     model_id: str = "gemini-flash-lite-latest"
-    max_output_tokens: int = 256
+    # ✅ ОПТИМИЗАЦИЯ 3A: max_output_tokens 256 → 180
+    # 5 тезисов × ~15 слов = 75 слов ≈ 100 токенов (русский), 180 с запасом
+    # Ускорение 20-30% за счет меньшей генерации. См. OPTIMIZATION_TABLE.md - код 3A
+    max_output_tokens: int = 180
     temperature: float = 0.3
     n_theses: int = 8
     language: str = "ru"
@@ -42,21 +52,50 @@ class GeminiThesisGenerator:
         self.max_output_tokens = int(max_output_tokens if max_output_tokens is not None else cfg.max_output_tokens)
         self.temperature = float(temperature if temperature is not None else cfg.temperature)
 
-        # Gemini client
+        # ✅ ОПТИМИЗАЦИЯ 3B: Выбор основной LLM через USE_LLM_ENGINE
+        # Cerebras - самый быстрый (1800+ tokens/sec), но требует API key
+        # Gemini - по умолчанию (надежный, бесплатный tier больше)
+        self.primary_engine = os.getenv("USE_LLM_ENGINE", "gemini").lower()
+        
+        # Gemini client (основной или fallback)
         key = api_key or os.getenv("GEMINI_API_KEY")
         if not key:
             raise RuntimeError("GEMINI_API_KEY не найден для ThesisGenerator")
         self.client = genai.Client(api_key=key)
-        logger.info(f"ThesisGenerator инициализирован: model={self.model_id}")
+        logger.info(f"ThesisGenerator Gemini: model={self.model_id}")
         
-        # OpenAI fallback (опционально)
+        # ✅ ОПТИМИЗАЦИЯ 3B: Cerebras (может быть основной или fallback)
+        self.cerebras_client = None
+        if CEREBRAS_AVAILABLE:
+            cerebras_key = os.getenv("CEREBRAS_API_KEY")
+            if cerebras_key:
+                try:
+                    self.cerebras_client = CerebrasLLM(
+                        api_key=cerebras_key,
+                        model="llama3.3-70b",
+                        max_tokens=self.max_output_tokens,
+                        temperature=self.temperature,
+                    )
+                    if self.primary_engine == "cerebras":
+                        logger.info("✅ Cerebras ОСНОВНАЯ LLM (очень быстро! 1800+ tok/s)")
+                    else:
+                        logger.info("✅ Cerebras fallback включен (ПРИОРИТЕТ #1)")
+                except Exception as e:
+                    logger.warning(f"Cerebras недоступен: {e}")
+            else:
+                if self.primary_engine == "cerebras":
+                    logger.error("❌ USE_LLM_ENGINE=cerebras, но CEREBRAS_API_KEY не найден!")
+                else:
+                    logger.debug("CEREBRAS_API_KEY не найден, Cerebras отключен")
+        
+        # OpenAI fallback (приоритет #2 - быстрый и надежный)
         self.openai_client = None
         if OPENAI_AVAILABLE:
             openai_key = os.getenv("OPENAI_API_KEY")
             if openai_key:
                 try:
                     self.openai_client = OpenAI(api_key=openai_key)
-                    logger.info("OpenAI fallback включен для генерации тезисов")
+                    logger.info("✅ OpenAI fallback включен (ПРИОРИТЕТ #2)")
                 except Exception as e:
                     logger.warning(f"OpenAI fallback недоступен: {e}")
             else:
@@ -66,12 +105,28 @@ class GeminiThesisGenerator:
         if not question_text:
             return []
         n = max(1, int(n))
+        
+        # ✅ Фильтрация команд системе (до отправки в API для экономии)
+        q_lower = question_text.lower().strip()
+        system_commands = [
+            'пиши разговорную речь', 'пиши разговорную', 'говори громче', 
+            'говори тише', 'говори быстрее', 'говори медленнее', 'остановись',
+            'стоп', 'хватит', 'спасибо', 'пока', 'привет', 'до свидания'
+        ]
+        if q_lower in system_commands or len(q_lower) < 3:
+            logger.debug(f"Команда системе отфильтрована: '{question_text}'")
+            return []
+        
+        # ✅ ОПТИМИЗАЦИЯ 3B: Если Cerebras основная LLM - используем её сразу
+        if self.primary_engine == "cerebras" and self.cerebras_client:
+            logger.debug("Используем Cerebras как основную LLM")
+            return self._generate_with_cerebras_primary(question_text, n, language, context)
         sys_instr = (
             "Ты генератор тезисов для устных экзаменов."
             " СТРОГИЕ ПРАВИЛА:"
             " 0. ⚠️ ФИЛЬТР: ПУСТАЯ СТРОКА только для ЯВНЫХ не-вопросов:"
             "    ❌ Игнорируй (пустая строка):"
-            "    • Команды системе: 'пиши разговорную речь', 'говори громче', 'остановись'"
+            "    • Команды системе: 'пиши разговорную речь', 'говори громче', 'остановись', 'пиши разговорную', 'говори быстрее', 'говори медленнее'"
             "    • Чистый бытовой разговор: 'это кушать будем', 'спасибо', 'пока', 'привет', 'до свидания'"
             "    • Простые утверждения без вопроса/просьбы: 'я устал', 'хорошая погода' (и нет вопросительных слов)"
             "    ✅ Отвечай на ВСЁ остальное, включая:"
@@ -195,10 +250,25 @@ class GeminiThesisGenerator:
             )
             logger.error(f"ThesisGenerator (Gemini) ошибка: {e}")
             
-            # Fallback на OpenAI при перегрузке Gemini
-            if is_server_overload and self.openai_client:
-                logger.warning("Gemini перегружен (503), переключаемся на OpenAI fallback")
-                raw = self._generate_openai(sys_instr, user_prompt, n)
+            # ✅ ОПТИМИЗАЦИЯ 3B: Fallback цепочка при перегрузке Gemini
+            # Порядок: Gemini → Cerebras → OpenAI (от самого быстрого к надежному)
+            if is_server_overload:
+                # Приоритет #1: Cerebras (самый быстрый!)
+                if self.cerebras_client:
+                    logger.warning("Gemini перегружен (503), переключаемся на Cerebras fallback (FAST!)")
+                    raw = self._generate_cerebras(sys_instr, user_prompt, n, context)
+                    if raw:
+                        logger.info("✅ Cerebras fallback успешно вернул тезисы")
+                    else:
+                        raw = self._generate_openai(sys_instr, user_prompt, n) if self.openai_client else ""
+                # Приоритет #2: OpenAI
+                elif self.openai_client:
+                    logger.warning("Gemini перегружен (503), переключаемся на OpenAI fallback")
+                    raw = self._generate_openai(sys_instr, user_prompt, n)
+                else:
+                    logger.error("Нет доступных fallback'ов (Cerebras/OpenAI)")
+                    return []
+                
                 if not raw:
                     return []
             else:
@@ -232,6 +302,72 @@ class GeminiThesisGenerator:
         lines = [ln.strip("-•* \t") for ln in raw.splitlines()]
         out: List[str] = [ln for ln in lines if ln]
         return out[:n]
+    
+    def _generate_with_cerebras_primary(self, question_text: str, n: int, language: str, context: Optional[str] = None) -> List[str]:
+        """
+        ✅ ОПТИМИЗАЦИЯ 3B: Генерация через Cerebras как основную LLM
+        С fallback на Gemini при ошибке
+        """
+        try:
+            # Используем Cerebras напрямую
+            theses = self.cerebras_client.generate_theses(
+                question=question_text,
+                context=context,
+                n=n,
+            )
+            
+            if theses:
+                logger.debug(f"✅ Cerebras (primary) вернул {len(theses)} тезисов")
+                return theses
+            
+            # Если пусто - fallback на Gemini
+            logger.warning("Cerebras вернул пустой результат, переключаемся на Gemini")
+            
+        except Exception as e:
+            logger.error(f"Cerebras (primary) ошибка: {e}, переключаемся на Gemini")
+        
+        # Fallback: используем стандартную генерацию через Gemini
+        # Временно отключаем primary_engine для рекурсии
+        original_engine = self.primary_engine
+        self.primary_engine = "gemini"
+        try:
+            result = self.generate(question_text, n, language, context)
+        finally:
+            self.primary_engine = original_engine
+        
+        return result
+    
+    def _generate_cerebras(self, system_instruction: str, user_prompt: str, n: int, context: Optional[str] = None) -> str:
+        """
+        ✅ ОПТИМИЗАЦИЯ 3B: Генерация через Cerebras (fallback при перегрузке Gemini)
+        Cerebras в 5-10 раз быстрее Gemini Flash благодаря специализированному железу
+        """
+        if not self.cerebras_client:
+            return ""
+        
+        try:
+            # Извлекаем вопрос из user_prompt (после "ТЕКУЩИЙ ВОПРОС")
+            import re
+            match = re.search(r'❓ ТЕКУЩИЙ ВОПРОС.*?:\s*(.*?)(?:\n\n|$)', user_prompt, re.DOTALL)
+            question = match.group(1).strip() if match else user_prompt
+            
+            theses = self.cerebras_client.generate_theses(
+                question=question,
+                context=context,
+                n=n,
+                system_prompt=system_instruction,
+            )
+            
+            # Возвращаем в формате |||
+            if theses:
+                raw = " ||| ".join(theses)
+                logger.debug(f"✅ Cerebras fallback вернул {len(theses)} тезисов")
+                return raw
+            return ""
+            
+        except Exception as e:
+            logger.error(f"Cerebras fallback ошибка: {e}")
+            return ""
     
     def _generate_openai(self, system_instruction: str, user_prompt: str, n: int) -> str:
         """Генерация через OpenAI (fallback при перегрузке Gemini)"""
